@@ -1,0 +1,70 @@
+proyecto:
+  nombre: Proyecto_ReID_HOG_HSV_Documentacion_OK
+  descripcion: Sistema PC Python para identificación facial y re-identificación en tiempo real.
+
+# La PC ejecuta toda la IA. Los celulares solo entregan video por USB, IP Webcam, DroidCam, RTSP/HTTP o archivo.
+ejecucion:
+  dispositivo: cpu
+  modo_app: escritorio_python
+  mostrar_ventana: true
+  guardar_salida: true
+
+camaras:
+  fuentes:
+    - id: camara_01
+      tipo: webcam
+      valor: 0
+      ubicacion: prueba_local
+    # Ejemplo IP Webcam/DroidCam:
+    # - id: camara_celular
+    #   tipo: ip
+    #   valor: http://192.168.1.20:8080/video
+    #   ubicacion: pasillo_frontal
+
+yolo:
+  # Si este archivo no está, ultralytics intentará cargar/descargar yolov8n.pt.
+  # Si YOLO no está disponible, el proyecto usa HOG de OpenCV como respaldo para no bloquear la ejecución.
+  pesos: modelos/yolov8n.pt
+  clase_persona: 0
+  confianza: 0.40
+  tamano_imagen: 640
+  dispositivo: cpu
+
+umbrales:
+  score_rostro: 0.70
+  score_reid: 0.65
+  nitidez_minima: 60.0
+  tamano_minimo_rostro: 40
+
+caracteristicas:
+  descriptor_rostro: hog
+  descriptor_reid: hsv
+  tamano_rostro: [96, 96]
+  tamano_torso: [128, 256]
+  bins_hsv: [16, 16, 8]
+
+# Re-ID se aprende durante la inferencia en vivo: cuando el rostro es reconocido
+# por HoG + SVM facial, se guarda HSV del torso con esa identidad y se reentrena SVM Re-ID.
+aprendizaje_reid_en_vivo:
+  activo: true
+  minimo_por_identidad: 4
+  reentrenar_cada: 8
+
+rutas:
+  datos: datos
+  rostros: datos/rostros
+  reidentificacion: datos/reidentificacion
+  pruebas_rostros: datos/pruebas/rostros
+  pruebas_reidentificacion: datos/pruebas/reidentificacion
+  desconocidos: datos/desconocidos
+  modelos: modelos
+  salidas: salidas
+  reportes: reportes
+  registros: registros
+
+entrenamiento:
+  modelo: svm
+  kernel: rbf
+  validacion: 0.20
+  semilla: 42
+  probabilidad: true
