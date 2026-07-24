@@ -13,7 +13,7 @@ CONFIGURACION_DEFECTO: Dict[str, Any] = {
     "proyecto": {"nombre": "Proyecto_ReID_HOG_HSV_Documentacion_OK"},
     "ejecucion": {"dispositivo": "cpu", "mostrar_ventana": True, "guardar_salida": True},
     "yolo": {"pesos": "modelos/yolov8n.pt", "clase_persona": 0, "confianza": 0.40, "tamano_imagen": 640},
-    "umbrales": {"score_rostro": 0.70, "score_reid": 0.65, "nitidez_minima": 60.0, "tamano_minimo_rostro": 40},
+    "umbrales": {"score_rostro": 0.80, "margen_rostro": 0.12, "score_reid": 0.65, "nitidez_minima": 60.0, "tamano_minimo_rostro": 40},
     "caracteristicas": {"tamano_rostro": [96, 96], "tamano_torso": [128, 256], "bins_hsv": [16, 16, 8]},
     "rutas": {
         "datos": "datos",
@@ -27,8 +27,14 @@ CONFIGURACION_DEFECTO: Dict[str, Any] = {
         "reportes": "reportes",
         "registros": "registros",
     },
-    "entrenamiento": {"kernel": "rbf", "validacion": 0.20, "semilla": 42, "probabilidad": True},
-    "aprendizaje_reid_en_vivo": {"activo": True, "minimo_por_identidad": 4, "reentrenar_cada": 8},
+    "entrenamiento": {"kernel": "rbf", "validacion": 0.20, "semilla": 42, "probabilidad": True, "max_muestras_por_clase": 0},
+    "aprendizaje_reid_en_vivo": {
+        "activo": True,
+        "minimo_por_identidad": 4,
+        "reentrenar_cada": 8,
+        "modelo_salida": "svm_reidentificacion_en_vivo.pkl",
+        "usar_modelo_en_vivo": True,
+    },
 }
 
 

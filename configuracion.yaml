@@ -9,6 +9,9 @@ ejecucion:
   mostrar_ventana: true
   guardar_salida: true
 
+panel_control:
+  activo: true
+
 camaras:
   fuentes:
     - id: camara_01
@@ -31,7 +34,8 @@ yolo:
   dispositivo: cpu
 
 umbrales:
-  score_rostro: 0.70
+  score_rostro: 0.80
+  margen_rostro: 0.12
   score_reid: 0.65
   nitidez_minima: 60.0
   tamano_minimo_rostro: 40
@@ -49,6 +53,8 @@ aprendizaje_reid_en_vivo:
   activo: true
   minimo_por_identidad: 4
   reentrenar_cada: 8
+  modelo_salida: svm_reidentificacion_en_vivo.pkl
+  usar_modelo_en_vivo: true
 
 rutas:
   datos: datos
@@ -68,3 +74,5 @@ entrenamiento:
   validacion: 0.20
   semilla: 42
   probabilidad: true
+  # 0 usa todas las imagenes disponibles en cada carpeta/clase.
+  max_muestras_por_clase: 0

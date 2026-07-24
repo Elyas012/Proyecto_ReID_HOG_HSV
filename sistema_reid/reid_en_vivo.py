@@ -26,6 +26,7 @@ class EntrenadorReIDEnVivo:
     reentrenar_cada: int = 8
     kernel: str = "rbf"
     probabilidad: bool = True
+    nombre_modelo: str = "svm_reidentificacion_en_vivo.pkl"
     vectores: List[np.ndarray] = field(default_factory=list)
     etiquetas: List[str] = field(default_factory=list)
     muestras_nuevas: int = 0
@@ -38,8 +39,8 @@ class EntrenadorReIDEnVivo:
 
     @property
     def ruta_modelo(self) -> Path:
-        """Ruta oficial del SVM Re-ID entrenado con HSV."""
-        return self.carpeta_modelos / "svm_reidentificacion.pkl"
+        """Ruta del SVM Re-ID que se actualiza durante la inferencia."""
+        return self.carpeta_modelos / self.nombre_modelo
 
     def cargar_estado(self) -> None:
         """Carga buffer HSV y SVM Re-ID previamente guardados, si existen."""

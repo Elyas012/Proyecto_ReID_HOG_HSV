@@ -18,7 +18,7 @@ import cv2
 import numpy as np
 
 from .caracteristicas import extraer_histograma_hsv, extraer_hog_rostro, recortar_torso, rostro_es_util
-from .datos import construir_dataset_reid, construir_dataset_rostros, guardar_metadata_csv
+from .datos import construir_dataset_reid, construir_dataset_rostros, guardar_imagen_bgr, guardar_metadata_csv
 from .deteccion import Deteccion, DetectorPersonasYOLO, DetectorRostros
 from .modelos_svm import entrenar_modelos_principales
 
@@ -54,8 +54,7 @@ def seleccionar_deteccion_principal(detecciones: Iterable[Deteccion]) -> Detecci
 
 def guardar_imagen(ruta: Path, imagen: np.ndarray) -> None:
     """Guarda una imagen creando carpetas si hace falta."""
-    ruta.parent.mkdir(parents=True, exist_ok=True)
-    cv2.imwrite(str(ruta), imagen)
+    guardar_imagen_bgr(ruta, imagen)
 
 
 def registrar_metadata(ruta_csv: Path, fila: Dict[str, object]) -> None:
@@ -191,8 +190,19 @@ def entrenar_desde_capturas(configuracion: Dict[str, object]) -> Dict[str, objec
     rutas = configuracion["rutas"]
     entrenamiento = configuracion.get("entrenamiento", {})
 
-    vectores_rostro, etiquetas_rostro, muestras_rostro = construir_dataset_rostros(rutas["rostros"])
-    vectores_reid, etiquetas_reid, muestras_reid = construir_dataset_reid(rutas["reidentificacion"])
+    max_muestras = int(entrenamiento.get("max_muestras_por_clase", 0))
+    semilla = int(entrenamiento.get("semilla", 42))
+
+    vectores_rostro, etiquetas_rostro, muestras_rostro = construir_dataset_rostros(
+        rutas["rostros"],
+        max_muestras_por_clase=max_muestras,
+        semilla=semilla,
+    )
+    vectores_reid, etiquetas_reid, muestras_reid = construir_dataset_reid(
+        rutas["reidentificacion"],
+        max_muestras_por_clase=max_muestras,
+        semilla=semilla,
+    )
 
     # Comentario clave: se guarda metadata del entrenamiento para evidenciar qué muestras se usaron.
     guardar_metadata_csv([*muestras_rostro, *muestras_reid], Path(rutas["registros"]) / "metadata_entrenamiento.csv")
@@ -205,6 +215,8 @@ def entrenar_desde_capturas(configuracion: Dict[str, object]) -> Dict[str, objec
         rutas["modelos"],
         kernel=str(entrenamiento.get("kernel", "rbf")),
         probabilidad=bool(entrenamiento.get("probabilidad", True)),
+        max_muestras_por_clase=max_muestras,
+        semilla=semilla,
     )
     return modelos
 

@@ -25,8 +25,10 @@ from sistema_reid.captura_tiempo_real import (
     entrenar_desde_capturas,
 )
 from sistema_reid.configuracion import cargar_configuracion, crear_directorios_base
-from sistema_reid.datos import listar_imagenes_por_identidad
+from sistema_reid.datos import cargar_imagen_bgr, listar_imagenes_por_identidad
+from sistema_reid.evaluacion import diagnosticar_modelo_rostro
 from sistema_reid.inferencia import MotorInferencia, ResultadoIdentidad, dibujar_resultados
+from sistema_reid.panel_control import PanelControlInferencia
 
 
 def crear_parser() -> argparse.ArgumentParser:
@@ -35,7 +37,7 @@ def crear_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", default="configuracion.yaml", help="Ruta del archivo de configuración")
     parser.add_argument(
         "--modo",
-        choices=["registrar_reid", "registrar_rostro", "registrar", "entrenar", "inferir", "demo", "revisar"],
+        choices=["registrar_reid", "registrar_rostro", "registrar", "entrenar", "inferir", "demo", "revisar", "diagnostico"],
         required=True,
         help="Acción principal a ejecutar",
     )
@@ -43,6 +45,7 @@ def crear_parser() -> argparse.ArgumentParser:
     parser.add_argument("--identidad", default=None, help="Nombre/ID de la persona a registrar")
     parser.add_argument("--muestras", type=int, default=40, help="Cantidad de muestras a capturar en tiempo real")
     parser.add_argument("--intervalo", type=int, default=5, help="Guardar una muestra cada N frames")
+    parser.add_argument("--max-img-entrenamiento", type=int, default=None, help="Maximo de imagenes por identidad para entrenar; 0 usa todas")
     parser.add_argument("--sin-ventana", action="store_true", help="Ejecutar sin ventanas de OpenCV")
     parser.add_argument("--auto-entrenar", action="store_true", help="Entrenar automáticamente después de registrar")
     return parser
@@ -67,6 +70,17 @@ def ejecutar_entrenamiento(configuracion: dict) -> None:
         print("[AVISO] No se entrenó ningún modelo. Registra rostros con --modo registrar_rostro y/o torso con --modo registrar_reid.")
 
 
+def ejecutar_diagnostico(configuracion: dict) -> None:
+    """Genera metricas del SVM facial y matriz de confusion."""
+    metricas = diagnosticar_modelo_rostro(configuracion)
+    carpeta_reportes = Path(configuracion["rutas"]["reportes"])
+    print("[OK] Diagnostico facial generado")
+    print(f"[OK] Accuracy: {metricas.get('accuracy', 0):.4f} | F1 macro: {metricas.get('f1_macro', 0):.4f}")
+    print(f"[OK] Reporte: {carpeta_reportes / 'diagnostico_rostro.txt'}")
+    print(f"[OK] Matriz CSV: {carpeta_reportes / 'matriz_confusion_rostro.csv'}")
+    print(f"[OK] Matriz imagen: {carpeta_reportes / 'matriz_confusion_rostro.jpg'}")
+
+
 def abrir_fuente(fuente: str):
     """Abre una imagen, video, URL o cámara según el valor recibido."""
     fuente = str(fuente)
@@ -79,9 +93,7 @@ def abrir_fuente(fuente: str):
         raise FileNotFoundError(f"No existe la fuente: {fuente}")
 
     if ruta.suffix.lower() in {".jpg", ".jpeg", ".png", ".bmp", ".webp"}:
-        imagen = cv2.imread(str(ruta))
-        if imagen is None:
-            raise RuntimeError(f"No se pudo leer la imagen: {ruta}")
+        imagen = cargar_imagen_bgr(ruta)
         return imagen, "imagen"
     return cv2.VideoCapture(str(ruta)), "video"
 
@@ -138,6 +150,11 @@ def ejecutar_inferencia(configuracion: dict, fuente: str) -> None:
     frame_numero = 0
     ultimo_tiempo = time.time()
     mostrar = bool(configuracion.get("ejecucion", {}).get("mostrar_ventana", True))
+    usar_panel = bool(configuracion.get("panel_control", {}).get("activo", True))
+    nombre_ventana = "Re-ID PC Python"
+    panel = PanelControlInferencia(nombre_ventana, configuracion) if mostrar and usar_panel else None
+    if mostrar and panel is None:
+        cv2.namedWindow(nombre_ventana, cv2.WINDOW_NORMAL)
 
     while True:
         ok, frame = captura.read()
@@ -155,8 +172,18 @@ def ejecutar_inferencia(configuracion: dict, fuente: str) -> None:
 
         # Comentario clave: la ventana permite validar visualmente el prototipo durante la exposición.
         if mostrar:
-            cv2.imshow("Re-ID PC Python", salida)
-            if cv2.waitKey(1) & 0xFF == ord("q"):
+            vista = panel.construir_vista(salida, resultados, fps, frame_numero) if panel else salida
+            cv2.imshow(nombre_ventana, vista)
+            tecla = cv2.waitKey(1) & 0xFF
+            if tecla == ord("d"):
+                print("[INFO] Generando diagnostico facial...")
+                try:
+                    ejecutar_diagnostico(configuracion)
+                    if panel:
+                        panel.recargar_diagnostico()
+                except Exception as exc:
+                    print(f"[AVISO] No se pudo generar diagnostico: {exc}")
+            if tecla == ord("q"):
                 break
 
     captura.release()
@@ -176,7 +203,13 @@ def revisar_estado(configuracion: Dict[str, object]) -> None:
     print("\n===== ESTADO DEL PROYECTO =====")
     print(f"Rostros guardados: {len(rostros)}")
     print(f"Muestras Re-ID guardadas: {len(reid)}")
+    max_muestras = int(configuracion.get("entrenamiento", {}).get("max_muestras_por_clase", 0))
+    print(f"Max imagenes/clase entrenamiento: {'todas' if max_muestras <= 0 else max_muestras}")
     print("Modelos SVM:", ", ".join(m.name for m in modelos) if modelos else "ninguno")
+    print("SVM rostro fijo:", "existe" if (Path(rutas["modelos"]) / "svm_rostro.pkl").exists() else "no existe")
+    print("SVM Re-ID fijo:", "existe" if (Path(rutas["modelos"]) / "svm_reidentificacion.pkl").exists() else "no existe")
+    modelo_reid_vivo = str(configuracion.get("aprendizaje_reid_en_vivo", {}).get("modelo_salida", "svm_reidentificacion_en_vivo.pkl"))
+    print("SVM Re-ID en vivo:", "existe" if (Path(rutas["modelos"]) / modelo_reid_vivo).exists() else "no existe")
     buffer_reid = Path(rutas["modelos"]) / "buffer_reid_hsv_en_vivo.npz"
     print("Buffer Re-ID en vivo:", "existe" if buffer_reid.exists() else "no existe")
     print("Rutas principales:")
@@ -188,6 +221,8 @@ def main() -> None:
     """Punto de entrada del proyecto."""
     argumentos = crear_parser().parse_args()
     configuracion = cargar_configuracion(argumentos.config)
+    if argumentos.max_img_entrenamiento is not None:
+        configuracion.setdefault("entrenamiento", {})["max_muestras_por_clase"] = argumentos.max_img_entrenamiento
     if argumentos.sin_ventana:
         configuracion.setdefault("ejecucion", {})["mostrar_ventana"] = False
     crear_directorios_base(configuracion)
@@ -202,6 +237,10 @@ def main() -> None:
 
     if argumentos.modo == "revisar":
         revisar_estado(configuracion)
+        return
+
+    if argumentos.modo == "diagnostico":
+        ejecutar_diagnostico(configuracion)
         return
 
     if argumentos.modo == "entrenar":

@@ -24,6 +24,14 @@ from .modelos_svm import ArtefactosSVM, cargar_artefactos, predecir_con_confianz
 from .reid_en_vivo import EntrenadorReIDEnVivo
 
 
+def margen_ranking(ranking: Dict[str, float]) -> float:
+    """Calcula la diferencia entre el primer y segundo candidato."""
+    if len(ranking) < 2:
+        return 1.0
+    valores = sorted((float(valor) for valor in ranking.values()), reverse=True)
+    return valores[0] - valores[1]
+
+
 @dataclass
 class ResultadoIdentidad:
     """Salida final para una persona detectada en un frame."""
@@ -57,6 +65,7 @@ class MotorInferencia:
 
         aprendizaje = configuracion.get("aprendizaje_reid_en_vivo", {})
         self.aprendizaje_reid_activo = bool(aprendizaje.get("activo", True))
+        self.usar_reid_en_vivo = bool(aprendizaje.get("usar_modelo_en_vivo", True))
         self.entrenador_reid: Optional[EntrenadorReIDEnVivo] = None
         if self.aprendizaje_reid_activo:
             self.entrenador_reid = EntrenadorReIDEnVivo(
@@ -65,6 +74,7 @@ class MotorInferencia:
                 reentrenar_cada=int(aprendizaje.get("reentrenar_cada", 8)),
                 kernel=str(configuracion.get("entrenamiento", {}).get("kernel", "rbf")),
                 probabilidad=bool(configuracion.get("entrenamiento", {}).get("probabilidad", True)),
+                nombre_modelo=str(aprendizaje.get("modelo_salida", "svm_reidentificacion_en_vivo.pkl")),
             )
 
     def cargar_modelos(self) -> None:
@@ -79,12 +89,15 @@ class MotorInferencia:
             print("[AVISO] No existe modelos/svm_rostro.pkl. Primero entrena con dataset de rostros.")
 
         if ruta_reid.exists():
-            self.modelo_reid = cargar_artefactos(ruta_reid)
+            modelo_reid_fijo = cargar_artefactos(ruta_reid)
+            if getattr(modelo_reid_fijo, "tipo", "") == "reid_hsv_svm_en_vivo":
+                print("[AVISO] modelos/svm_reidentificacion.pkl parece venir del entrenamiento en vivo anterior; no se carga como Re-ID fijo.")
+            else:
+                self.modelo_reid = modelo_reid_fijo
 
         if self.entrenador_reid:
             self.entrenador_reid.cargar_estado()
-            if self.entrenador_reid.modelo is not None:
-                # Comentario clave: el SVM Re-ID puede venir de capturas previas o de aprendizaje en vivo.
+            if self.usar_reid_en_vivo and self.entrenador_reid.modelo is not None:
                 self.modelo_reid = self.entrenador_reid.modelo
 
     def _actualizar_reid_en_vivo(self, identidad: str, vector_hsv: np.ndarray) -> Dict[str, int]:
@@ -136,6 +149,7 @@ class MotorInferencia:
         """Clasifica un ROI que ya corresponde directamente a un rostro."""
         umbrales = self.configuracion.get("umbrales", {})
         score_rostro_min = float(umbrales.get("score_rostro", 0.70))
+        margen_rostro_min = float(umbrales.get("margen_rostro", 0.0))
         tamano_min = int(umbrales.get("tamano_minimo_rostro", 40))
 
         alto_rostro, ancho_rostro = deteccion_rostro.roi.shape[:2]
@@ -161,7 +175,8 @@ class MotorInferencia:
 
         vector_rostro = extraer_hog_rostro(deteccion_rostro.roi)
         identidad, score, ranking = predecir_con_confianza(self.modelo_rostro, vector_rostro)
-        if score >= score_rostro_min:
+        margen = margen_ranking(ranking)
+        if score >= score_rostro_min and margen >= margen_rostro_min:
             return ResultadoIdentidad(
                 identidad,
                 "rostro_directo_hog_svm",
@@ -177,13 +192,14 @@ class MotorInferencia:
             score,
             deteccion_rostro.caja,
             ranking,
-            detalle="rostro detectado directo, score bajo",
+            detalle=f"rostro detectado directo, score/margen bajo ({margen:.2f})",
         )
 
     def decidir_identidad(self, deteccion_persona: Deteccion) -> ResultadoIdentidad:
         """Decide identidad respetando prioridad: rostro HoG+SVM y luego Re-ID HSV+SVM."""
         umbrales = self.configuracion.get("umbrales", {})
         score_rostro_min = float(umbrales.get("score_rostro", 0.70))
+        margen_rostro_min = float(umbrales.get("margen_rostro", 0.0))
         tamano_min = int(umbrales.get("tamano_minimo_rostro", 40))
         nitidez_min = float(umbrales.get("nitidez_minima", 60.0))
 
@@ -202,7 +218,8 @@ class MotorInferencia:
 
         vector_rostro = extraer_hog_rostro(rostro.roi)
         identidad, score, ranking = predecir_con_confianza(self.modelo_rostro, vector_rostro)
-        if score >= score_rostro_min:
+        margen = margen_ranking(ranking)
+        if score >= score_rostro_min and margen >= margen_rostro_min:
             # Comentario clave: si el rostro fue reconocido, se acepta la identidad por HoG + SVM.
             estado_reid = self._actualizar_reid_en_vivo(identidad, vector_hsv)
             return ResultadoIdentidad(
@@ -216,7 +233,7 @@ class MotorInferencia:
             )
 
         # Comentario clave: rostro visible pero score bajo NO se fuerza; se pasa a Re-ID.
-        return self._clasificar_reid(deteccion_persona, vector_hsv, "score_facial_bajo")
+        return self._clasificar_reid(deteccion_persona, vector_hsv, f"score_o_margen_facial_bajo_{margen:.2f}")
 
     def procesar_frame(self, frame: np.ndarray) -> List[ResultadoIdentidad]:
         """Procesa un frame completo y devuelve identidad por cada persona detectada."""
@@ -227,9 +244,7 @@ class MotorInferencia:
 
         detecciones = self.detector_personas.detectar_personas(frame)
         resultados: List[ResultadoIdentidad] = []
-
         for deteccion in detecciones:
-            # Comentario clave: cada ROI tiene su propia decisión para soportar varias personas en escena.
             resultados.append(self.decidir_identidad(deteccion))
         return resultados
 
