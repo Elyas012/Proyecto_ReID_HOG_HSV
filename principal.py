@@ -41,8 +41,8 @@ def crear_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", default="configuracion.yaml", help="Ruta del archivo de configuración")
     parser.add_argument(
         "--modo",
-        choices=["registrar_reid", "registrar_rostro", "registrar", "entrenar", "inferir", "demo", "revisar", "diagnostico"],
-        required=True,
+        choices=["menu", "registrar_reid", "registrar_rostro", "registrar", "entrenar", "inferir", "demo", "revisar", "diagnostico"],
+        default="menu",
         help="Acción principal a ejecutar",
     )
     parser.add_argument("--fuente", default=None, help="Imagen, video, URL IP/RTSP/HTTP o índice de cámara")
@@ -541,6 +541,16 @@ def revisar_estado(configuracion: Dict[str, object]) -> None:
     print("\n===== ESTADO DEL PROYECTO =====")
     print(f"Rostros guardados: {len(rostros)}")
     print(f"Muestras Re-ID guardadas: {len(reid)}")
+    conteo_rostros: Dict[str, int] = {}
+    conteo_reid: Dict[str, int] = {}
+    for muestra in rostros:
+        conteo_rostros[muestra.identidad] = conteo_rostros.get(muestra.identidad, 0) + 1
+    for muestra in reid:
+        conteo_reid[muestra.identidad] = conteo_reid.get(muestra.identidad, 0) + 1
+    if conteo_rostros:
+        print("Rostros por persona:", ", ".join(f"{k}:{v}" for k, v in sorted(conteo_rostros.items())))
+    if conteo_reid:
+        print("Re-ID por persona:", ", ".join(f"{k}:{v}" for k, v in sorted(conteo_reid.items())))
     max_muestras = int(configuracion.get("entrenamiento", {}).get("max_muestras_por_clase", 0))
     print(f"Max imagenes/clase entrenamiento: {'todas' if max_muestras <= 0 else max_muestras}")
     print("Modelos SVM:", ", ".join(m.name for m in modelos) if modelos else "ninguno")
@@ -555,6 +565,321 @@ def revisar_estado(configuracion: Dict[str, object]) -> None:
         print(f"- {clave}: {rutas[clave]}")
 
 
+def leer_texto_menu(mensaje: str, defecto: Optional[str] = None) -> str:
+    """Lee texto de consola con valor por defecto."""
+    sufijo = f" [{defecto}]" if defecto not in {None, ""} else ""
+    valor = input(f"{mensaje}{sufijo}: ").strip()
+    if not valor and defecto is not None:
+        return str(defecto)
+    return valor
+
+
+def leer_entero_menu(mensaje: str, defecto: int) -> int:
+    """Lee un entero de consola sin cerrar el menu si el usuario se equivoca."""
+    valor = input(f"{mensaje} [{defecto}]: ").strip()
+    if not valor:
+        return defecto
+    try:
+        return int(valor)
+    except ValueError:
+        print(f"[AVISO] Valor invalido. Se usara {defecto}.")
+        return defecto
+
+
+def pausar_menu() -> None:
+    """Pausa breve para que el usuario lea la salida antes de volver al menu."""
+    input("\nPresiona Enter para volver al menu...")
+
+
+def ejecutar_registro_desde_menu(configuracion: dict, modo_captura: str) -> None:
+    """Ejecuta registro de rostro, Re-ID o ambos desde el menu interactivo."""
+    identidad = leer_texto_menu("Identidad/persona")
+    if not identidad:
+        print("[AVISO] Debes escribir una identidad.")
+        return
+
+    fuente = leer_texto_menu("Camara, URL o video", obtener_fuente_defecto(configuracion))
+    muestras = leer_entero_menu("Cantidad de muestras", 40)
+    intervalo = leer_entero_menu("Guardar cada N frames", 5)
+    resumen = capturar_muestras_tiempo_real(
+        configuracion,
+        identidad=identidad,
+        fuente=fuente,
+        modo_captura=modo_captura,
+        muestras_objetivo=muestras,
+        intervalo_frames=intervalo,
+        mostrar_ventana=bool(configuracion.get("ejecucion", {}).get("mostrar_ventana", True)),
+    )
+    print(f"[OK] Registro completado: {resumen}")
+
+
+def ejecutar_menu_consola(configuracion: dict) -> None:
+    """Menu basico para usar el sistema sin recordar comandos."""
+    while True:
+        print("\n===== MENU RE-ID =====")
+        print("1. Inferir con 4 camaras")
+        print("2. Inferir con una camara")
+        print("3. Cargar imagen")
+        print("4. Cargar video")
+        print("5. Entrenar modelos")
+        print("6. Ver estado / cuantas imagenes hay")
+        print("7. Diagnostico rostro")
+        print("8. Registrar rostro")
+        print("9. Registrar Re-ID torso/ropa")
+        print("10. Registrar rostro + Re-ID")
+        print("0. Salir")
+
+        opcion = input("Opcion: ").strip()
+        try:
+            if opcion == "1":
+                multi = configuracion.get("multicamara", {})
+                max_camaras = int(multi.get("max_camaras", 4))
+                fuentes = obtener_fuentes_multicamara(configuracion, max_camaras=max_camaras)
+                ejecutar_inferencia_multicamara(configuracion, fuentes)
+            elif opcion == "2":
+                fuente = leer_texto_menu("Camara, URL o video", obtener_fuente_defecto(configuracion))
+                ejecutar_inferencia(configuracion, fuente)
+            elif opcion == "3":
+                ruta = leer_texto_menu("Ruta de la imagen")
+                if ruta:
+                    ejecutar_inferencia(configuracion, ruta)
+            elif opcion == "4":
+                ruta = leer_texto_menu("Ruta del video")
+                if ruta:
+                    ejecutar_inferencia(configuracion, ruta)
+            elif opcion == "5":
+                ejecutar_entrenamiento(configuracion)
+                pausar_menu()
+            elif opcion == "6":
+                revisar_estado(configuracion)
+                pausar_menu()
+            elif opcion == "7":
+                ejecutar_diagnostico(configuracion)
+                pausar_menu()
+            elif opcion == "8":
+                ejecutar_registro_desde_menu(configuracion, "rostro")
+            elif opcion == "9":
+                ejecutar_registro_desde_menu(configuracion, "reid")
+            elif opcion == "10":
+                ejecutar_registro_desde_menu(configuracion, "ambos")
+            elif opcion == "0":
+                print("[OK] Saliendo.")
+                return
+            else:
+                print("[AVISO] Opcion no valida.")
+        except KeyboardInterrupt:
+            print("\n[OK] Operacion cancelada.")
+        except Exception as exc:
+            print(f"[AVISO] No se pudo completar la opcion: {exc}")
+            pausar_menu()
+
+
+def ejecutar_menu(configuracion: dict) -> None:
+    """Menu grafico basico en Tkinter para seleccionar acciones del sistema."""
+    try:
+        import tkinter as tk
+        from tkinter import filedialog, messagebox, simpledialog
+    except Exception as exc:
+        print(f"[AVISO] No se pudo abrir Tkinter ({exc}). Usando menu de consola.")
+        ejecutar_menu_consola(configuracion)
+        return
+
+    try:
+        root = tk.Tk()
+    except Exception as exc:
+        print(f"[AVISO] No se pudo crear la ventana Tkinter ({exc}). Usando menu de consola.")
+        ejecutar_menu_consola(configuracion)
+        return
+    root.title("Menu Re-ID HOG/HSV/SVM")
+    root.geometry("760x620")
+    root.minsize(680, 560)
+
+    color_fondo = "#f3f4f6"
+    color_panel = "#ffffff"
+    color_boton = "#1f2937"
+    color_boton_sec = "#374151"
+    root.configure(bg=color_fondo)
+
+    contenedor = tk.Frame(root, bg=color_fondo, padx=22, pady=18)
+    contenedor.pack(fill="both", expand=True)
+
+    titulo = tk.Label(
+        contenedor,
+        text="Sistema Re-ID",
+        font=("Segoe UI", 20, "bold"),
+        bg=color_fondo,
+        fg="#111827",
+    )
+    titulo.pack(anchor="w")
+
+    subtitulo = tk.Label(
+        contenedor,
+        text="Selecciona una opcion. En camaras o video cierra con la tecla q.",
+        font=("Segoe UI", 10),
+        bg=color_fondo,
+        fg="#4b5563",
+    )
+    subtitulo.pack(anchor="w", pady=(2, 14))
+
+    cuerpo = tk.Frame(contenedor, bg=color_fondo)
+    cuerpo.pack(fill="both", expand=True)
+
+    panel_botones = tk.Frame(cuerpo, bg=color_panel, padx=14, pady=14, relief="solid", bd=1)
+    panel_botones.pack(side="left", fill="y")
+
+    panel_salida = tk.Frame(cuerpo, bg=color_panel, padx=14, pady=14, relief="solid", bd=1)
+    panel_salida.pack(side="right", fill="both", expand=True, padx=(16, 0))
+
+    salida_titulo = tk.Label(panel_salida, text="Salida", font=("Segoe UI", 12, "bold"), bg=color_panel, fg="#111827")
+    salida_titulo.pack(anchor="w")
+
+    salida = tk.Text(panel_salida, height=22, wrap="word", font=("Consolas", 9), bg="#111827", fg="#e5e7eb", insertbackground="#e5e7eb")
+    salida.pack(fill="both", expand=True, pady=(8, 0))
+    salida.insert("1.0", "Listo. Elige una opcion del menu.\n")
+    salida.configure(state="disabled")
+
+    def escribir_salida(texto: str) -> None:
+        salida.configure(state="normal")
+        salida.delete("1.0", "end")
+        salida.insert("1.0", texto or "[OK] Operacion completada.")
+        salida.configure(state="disabled")
+
+    def capturar_salida(funcion, *args) -> str:
+        import contextlib
+        import io
+
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            funcion(*args)
+        return buffer.getvalue()
+
+    def ejecutar_con_opencv(funcion, *args) -> None:
+        root.withdraw()
+        try:
+            funcion(*args)
+        except Exception as exc:
+            messagebox.showerror("Error", str(exc))
+        finally:
+            root.deiconify()
+            root.lift()
+
+    def inferir_4_camaras() -> None:
+        multi = configuracion.get("multicamara", {})
+        max_camaras = int(multi.get("max_camaras", 4))
+        fuentes = obtener_fuentes_multicamara(configuracion, max_camaras=max_camaras)
+        ejecutar_con_opencv(ejecutar_inferencia_multicamara, configuracion, fuentes)
+
+    def inferir_una_camara() -> None:
+        fuente = simpledialog.askstring("Camara individual", "Camara, URL o ruta:", initialvalue=obtener_fuente_defecto(configuracion), parent=root)
+        if fuente:
+            ejecutar_con_opencv(ejecutar_inferencia, configuracion, fuente)
+
+    def cargar_imagen_menu() -> None:
+        ruta = filedialog.askopenfilename(
+            title="Seleccionar imagen",
+            filetypes=[("Imagenes", "*.jpg *.jpeg *.png *.bmp *.webp"), ("Todos", "*.*")],
+        )
+        if ruta:
+            texto = capturar_salida(ejecutar_inferencia, configuracion, ruta)
+            escribir_salida(texto)
+            messagebox.showinfo("Imagen procesada", texto or "Imagen procesada.")
+
+    def cargar_video_menu() -> None:
+        ruta = filedialog.askopenfilename(
+            title="Seleccionar video",
+            filetypes=[("Videos", "*.mp4 *.avi *.mov *.mkv *.webm"), ("Todos", "*.*")],
+        )
+        if ruta:
+            ejecutar_con_opencv(ejecutar_inferencia, configuracion, ruta)
+
+    def entrenar_menu() -> None:
+        try:
+            escribir_salida(capturar_salida(ejecutar_entrenamiento, configuracion))
+            messagebox.showinfo("Entrenamiento", "Entrenamiento finalizado.")
+        except Exception as exc:
+            messagebox.showerror("Error", str(exc))
+
+    def estado_menu() -> None:
+        escribir_salida(capturar_salida(revisar_estado, configuracion))
+
+    def diagnostico_menu() -> None:
+        try:
+            escribir_salida(capturar_salida(ejecutar_diagnostico, configuracion))
+            messagebox.showinfo("Diagnostico", "Diagnostico generado.")
+        except Exception as exc:
+            messagebox.showerror("Error", str(exc))
+
+    def registrar_menu(modo_captura: str) -> None:
+        identidad = simpledialog.askstring("Registro", "Identidad/persona:", parent=root)
+        if not identidad:
+            return
+        fuente = simpledialog.askstring("Registro", "Camara, URL o video:", initialvalue=obtener_fuente_defecto(configuracion), parent=root)
+        if not fuente:
+            return
+        muestras = simpledialog.askinteger("Registro", "Cantidad de muestras:", initialvalue=40, minvalue=1, parent=root)
+        if not muestras:
+            return
+        intervalo = simpledialog.askinteger("Registro", "Guardar cada N frames:", initialvalue=5, minvalue=1, parent=root)
+        if not intervalo:
+            return
+        ejecutar_con_opencv(
+            capturar_muestras_tiempo_real,
+            configuracion,
+            identidad,
+            fuente,
+            modo_captura,
+            muestras,
+            intervalo,
+            bool(configuracion.get("ejecucion", {}).get("mostrar_ventana", True)),
+        )
+
+    def boton(texto: str, comando, color: str = color_boton) -> None:
+        tk.Button(
+            panel_botones,
+            text=texto,
+            command=comando,
+            width=28,
+            anchor="w",
+            padx=12,
+            pady=8,
+            bg=color,
+            fg="white",
+            activebackground="#111827",
+            activeforeground="white",
+            font=("Segoe UI", 10),
+            relief="flat",
+        ).pack(fill="x", pady=4)
+
+    boton("1. Inferir con 4 camaras", inferir_4_camaras)
+    boton("2. Inferir con una camara", inferir_una_camara)
+    boton("3. Cargar imagen", cargar_imagen_menu)
+    boton("4. Cargar video", cargar_video_menu)
+    boton("5. Entrenar modelos", entrenar_menu, color_boton_sec)
+    boton("6. Ver estado / imagenes", estado_menu, color_boton_sec)
+    boton("7. Diagnostico rostro", diagnostico_menu, color_boton_sec)
+    boton("8. Registrar rostro", lambda: registrar_menu("rostro"), color_boton_sec)
+    boton("9. Registrar Re-ID torso/ropa", lambda: registrar_menu("reid"), color_boton_sec)
+    boton("10. Registrar rostro + Re-ID", lambda: registrar_menu("ambos"), color_boton_sec)
+
+    tk.Button(
+        panel_botones,
+        text="Salir",
+        command=root.destroy,
+        width=28,
+        anchor="w",
+        padx=12,
+        pady=8,
+        bg="#b91c1c",
+        fg="white",
+        activebackground="#7f1d1d",
+        activeforeground="white",
+        font=("Segoe UI", 10),
+        relief="flat",
+    ).pack(fill="x", pady=(16, 4))
+
+    root.mainloop()
+
+
 def main() -> None:
     """Punto de entrada del proyecto."""
     argumentos = crear_parser().parse_args()
@@ -566,6 +891,10 @@ def main() -> None:
     crear_directorios_base(configuracion)
 
     fuente = argumentos.fuente or obtener_fuente_defecto(configuracion)
+
+    if argumentos.modo == "menu":
+        ejecutar_menu(configuracion)
+        return
 
     if argumentos.modo == "demo":
         crear_dataset_demo(configuracion)

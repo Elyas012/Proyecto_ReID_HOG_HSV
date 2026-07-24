@@ -32,6 +32,14 @@ python -c "from ultralytics import YOLO; YOLO('yolov8n.pt')"
 
 ## Orden correcto para ejecutar todo
 
+### Menu basico
+
+```bat
+python principal.py
+```
+
+Abre una ventana basica con botones usando Tkinter. Desde ahi puedes elegir inferencia con 4 camaras, camara individual, imagen, video, entrenar, revisar conteos y registrar muestras. Si Tkinter no esta disponible en tu instalacion de Python, cae al menu de consola.
+
 ### 1. Revisar estado
 
 ```bat
