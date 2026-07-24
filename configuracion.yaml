@@ -9,6 +9,23 @@ ejecucion:
   mostrar_ventana: true
   guardar_salida: true
 
+# 0 = automatico. En multicamara se reserva CPU para que Windows siga respondiendo.
+rendimiento:
+  reservar_nucleos: 1
+  hilos_cpu: 0
+  hilos_cpu_multicamara: 0
+
+# Se activa solo con: python principal.py --modo inferir
+# Si pasas --fuente, se conserva la inferencia de una sola camara/video.
+multicamara:
+  activo_sin_fuente_en_inferir: true
+  max_camaras: 4
+  ancho_proceso: 640
+  ancho_celda: 640
+  alto_celda: 360
+  intervalo_inferencia_ms: 120
+  tamano_yolo: 416
+
 panel_control:
   activo: true
 

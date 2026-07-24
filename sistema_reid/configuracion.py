@@ -12,6 +12,16 @@ import yaml
 CONFIGURACION_DEFECTO: Dict[str, Any] = {
     "proyecto": {"nombre": "Proyecto_ReID_HOG_HSV_Documentacion_OK"},
     "ejecucion": {"dispositivo": "cpu", "mostrar_ventana": True, "guardar_salida": True},
+    "rendimiento": {"reservar_nucleos": 1, "hilos_cpu": 0, "hilos_cpu_multicamara": 0},
+    "multicamara": {
+        "activo_sin_fuente_en_inferir": True,
+        "max_camaras": 4,
+        "ancho_proceso": 640,
+        "ancho_celda": 640,
+        "alto_celda": 360,
+        "intervalo_inferencia_ms": 120,
+        "tamano_yolo": 416,
+    },
     "yolo": {"pesos": "modelos/yolov8n.pt", "clase_persona": 0, "confianza": 0.40, "tamano_imagen": 640},
     "umbrales": {"score_rostro": 0.80, "margen_rostro": 0.12, "score_reid": 0.65, "nitidez_minima": 60.0, "tamano_minimo_rostro": 40},
     "caracteristicas": {"tamano_rostro": [96, 96], "tamano_torso": [128, 256], "bins_hsv": [16, 16, 8]},

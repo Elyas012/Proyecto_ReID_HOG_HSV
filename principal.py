@@ -13,11 +13,15 @@ from __future__ import annotations
 
 import argparse
 import csv
+import os
+import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable
+from typing import Dict, Iterable, List, Optional, Tuple
 
 import cv2
+import numpy as np
 
 from sistema_reid.captura_tiempo_real import (
     capturar_muestras_tiempo_real,
@@ -61,6 +65,37 @@ def obtener_fuente_defecto(configuracion: Dict[str, object]) -> str:
     return "0"
 
 
+def configurar_uso_cpu(configuracion: Dict[str, object], multicamara: bool = False) -> None:
+    """Ajusta hilos de CPU para mejorar FPS sin ocupar todos los nucleos."""
+    rendimiento = configuracion.get("rendimiento", {})
+    nucleos = max(1, os.cpu_count() or 1)
+    reservar = max(0, int(rendimiento.get("reservar_nucleos", 1)))
+    hilos_auto = max(1, nucleos - reservar)
+
+    if multicamara:
+        hilos = int(rendimiento.get("hilos_cpu_multicamara", 0) or 0)
+        if hilos <= 0:
+            hilos = min(max(2, hilos_auto), 6)
+    else:
+        hilos = int(rendimiento.get("hilos_cpu", 0) or 0)
+        if hilos <= 0:
+            hilos = hilos_auto
+
+    hilos = max(1, min(hilos, nucleos))
+    try:
+        cv2.setNumThreads(hilos)
+    except cv2.error:
+        pass
+
+    try:  # pragma: no cover - torch puede no estar instalado en todos los entornos
+        import torch
+
+        torch.set_num_threads(hilos)
+        torch.set_num_interop_threads(max(1, min(2, hilos // 2 or 1)))
+    except Exception:
+        pass
+
+
 def ejecutar_entrenamiento(configuracion: dict) -> None:
     """Entrena SVM facial HoG y SVM Re-ID HSV con las capturas actuales."""
     modelos = entrenar_desde_capturas(configuracion)
@@ -86,7 +121,13 @@ def abrir_fuente(fuente: str):
     fuente = str(fuente)
     if fuente.isdigit() or fuente.startswith(("http://", "https://", "rtsp://")):
         # Comentario clave: aquí entran webcams locales, celulares por IP Webcam/DroidCam y RTSP.
-        return cv2.VideoCapture(int(fuente) if fuente.isdigit() else fuente), "video"
+        if fuente.isdigit():
+            indice = int(fuente)
+            captura = cv2.VideoCapture(indice, cv2.CAP_DSHOW) if os.name == "nt" else cv2.VideoCapture(indice)
+        else:
+            captura = cv2.VideoCapture(fuente)
+        optimizar_captura(captura)
+        return captura, "video"
 
     ruta = Path(fuente)
     if not ruta.exists():
@@ -95,7 +136,108 @@ def abrir_fuente(fuente: str):
     if ruta.suffix.lower() in {".jpg", ".jpeg", ".png", ".bmp", ".webp"}:
         imagen = cargar_imagen_bgr(ruta)
         return imagen, "imagen"
-    return cv2.VideoCapture(str(ruta)), "video"
+    captura = cv2.VideoCapture(str(ruta))
+    optimizar_captura(captura)
+    return captura, "video"
+
+
+def optimizar_captura(captura, ancho: Optional[int] = None, alto: Optional[int] = None, fps: Optional[int] = None) -> None:
+    """Reduce latencia de lectura y fija resolucion cuando la camara lo permite."""
+    if captura is None:
+        return
+    ajustes = [(cv2.CAP_PROP_BUFFERSIZE, 1)]
+    if ancho:
+        ajustes.append((cv2.CAP_PROP_FRAME_WIDTH, int(ancho)))
+    if alto:
+        ajustes.append((cv2.CAP_PROP_FRAME_HEIGHT, int(alto)))
+    if fps:
+        ajustes.append((cv2.CAP_PROP_FPS, int(fps)))
+
+    for propiedad, valor in ajustes:
+        try:
+            captura.set(propiedad, valor)
+        except cv2.error:
+            pass
+
+
+def obtener_fuentes_multicamara(configuracion: Dict[str, object], max_camaras: int = 4) -> List[Tuple[str, str]]:
+    """Obtiene hasta cuatro fuentes; si faltan, completa con indices locales."""
+    fuentes_config = configuracion.get("camaras", {}).get("fuentes", [])
+    fuentes: List[Tuple[str, str]] = []
+    valores_vistos = set()
+
+    for indice, fuente in enumerate(fuentes_config):
+        if len(fuentes) >= max_camaras:
+            break
+        valor = str(fuente.get("valor", fuente.get("url", fuente.get("path", indice))))
+        if valor in valores_vistos:
+            continue
+        camara_id = str(fuente.get("id", f"camara_{len(fuentes) + 1:02d}"))
+        fuentes.append((camara_id, valor))
+        valores_vistos.add(valor)
+
+    indice_local = 0
+    while len(fuentes) < max_camaras:
+        valor = str(indice_local)
+        if valor not in valores_vistos:
+            fuentes.append((f"camara_{len(fuentes) + 1:02d}", valor))
+            valores_vistos.add(valor)
+        indice_local += 1
+    return fuentes[:max_camaras]
+
+
+@dataclass
+class LectorCamara:
+    """Mantiene el ultimo frame disponible de una camara sin acumular cola."""
+
+    camara_id: str
+    fuente: str
+    captura: object
+    activa: bool = False
+    frame: Optional[np.ndarray] = None
+    frame_numero: int = 0
+    error: str = ""
+
+    def __post_init__(self) -> None:
+        self._lock = threading.Lock()
+        self._hilo: Optional[threading.Thread] = None
+
+    def iniciar(self) -> None:
+        if not self.captura or not self.captura.isOpened():
+            self.error = "no disponible"
+            return
+        self.activa = True
+        self._hilo = threading.Thread(target=self._leer, name=f"lector-{self.camara_id}", daemon=True)
+        self._hilo.start()
+
+    def _leer(self) -> None:
+        fallos = 0
+        while self.activa:
+            ok, frame = self.captura.read()
+            if not ok:
+                fallos += 1
+                self.error = "sin senal"
+                if fallos >= 30:
+                    time.sleep(0.15)
+                continue
+            fallos = 0
+            with self._lock:
+                self.frame = frame
+                self.frame_numero += 1
+                self.error = ""
+
+    def obtener_frame(self) -> Tuple[Optional[np.ndarray], int]:
+        with self._lock:
+            if self.frame is None:
+                return None, self.frame_numero
+            return self.frame.copy(), self.frame_numero
+
+    def detener(self) -> None:
+        self.activa = False
+        if self._hilo and self._hilo.is_alive():
+            self._hilo.join(timeout=1.0)
+        if self.captura:
+            self.captura.release()
 
 
 def guardar_log_predicciones(ruta_csv: Path, frame_numero: int, resultados: Iterable[ResultadoIdentidad], fps: float) -> None:
@@ -123,8 +265,204 @@ def guardar_log_predicciones(ruta_csv: Path, frame_numero: int, resultados: Iter
             )
 
 
+def guardar_log_predicciones_camara(
+    ruta_csv: Path,
+    camara_id: str,
+    frame_numero: int,
+    resultados: Iterable[ResultadoIdentidad],
+    fps: float,
+) -> None:
+    """Guarda predicciones multicamara con el identificador de fuente."""
+    ruta_csv.parent.mkdir(parents=True, exist_ok=True)
+    existe = ruta_csv.exists()
+    campos = ["camara", "frame", "identidad", "metodo", "score", "bbox", "fps", "detalle", "ranking"]
+    with ruta_csv.open("a", newline="", encoding="utf-8") as archivo:
+        escritor = csv.DictWriter(archivo, fieldnames=campos)
+        if not existe:
+            escritor.writeheader()
+        for resultado in resultados:
+            escritor.writerow(
+                {
+                    "camara": camara_id,
+                    "frame": frame_numero,
+                    "identidad": resultado.identidad,
+                    "metodo": resultado.metodo,
+                    "score": f"{resultado.score:.4f}",
+                    "bbox": list(resultado.caja),
+                    "fps": f"{fps:.2f}",
+                    "detalle": resultado.detalle,
+                    "ranking": resultado.ranking,
+                }
+            )
+
+
+def redimensionar_para_inferencia(frame: np.ndarray, ancho_maximo: int) -> np.ndarray:
+    """Reduce frames grandes antes de detectar para sostener mejor FPS."""
+    if ancho_maximo <= 0:
+        return frame
+    alto, ancho = frame.shape[:2]
+    if ancho <= ancho_maximo:
+        return frame
+    escala = ancho_maximo / float(ancho)
+    nuevo_tamano = (ancho_maximo, max(1, int(alto * escala)))
+    return cv2.resize(frame, nuevo_tamano, interpolation=cv2.INTER_AREA)
+
+
+def ajustar_a_celda(frame: np.ndarray, ancho: int, alto: int) -> np.ndarray:
+    """Encaja un frame en una celda fija sin deformarlo."""
+    lienzo = np.zeros((alto, ancho, 3), dtype=np.uint8)
+    h, w = frame.shape[:2]
+    escala = min(ancho / max(1, w), alto / max(1, h))
+    nuevo_w = max(1, int(w * escala))
+    nuevo_h = max(1, int(h * escala))
+    redimensionado = cv2.resize(frame, (nuevo_w, nuevo_h), interpolation=cv2.INTER_AREA)
+    x = (ancho - nuevo_w) // 2
+    y = (alto - nuevo_h) // 2
+    lienzo[y : y + nuevo_h, x : x + nuevo_w] = redimensionado
+    return lienzo
+
+
+def dibujar_etiqueta_camara(frame: np.ndarray, camara_id: str, fuente: str, fps: float, frame_numero: int) -> np.ndarray:
+    """Dibuja identificacion compacta para cada celda de la cuadricula."""
+    salida = frame.copy()
+    texto = f"{camara_id} | {fuente} | FPS inf {fps:.1f} | frame {frame_numero}"
+    cv2.rectangle(salida, (0, 0), (salida.shape[1], 32), (20, 20, 20), -1)
+    cv2.putText(salida, texto[:95], (10, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (235, 235, 235), 1, cv2.LINE_AA)
+    return salida
+
+
+def crear_placeholder_camara(camara_id: str, fuente: str, ancho: int, alto: int, estado: str) -> np.ndarray:
+    """Crea una celda visible para camaras no abiertas o sin senal."""
+    imagen = np.full((alto, ancho, 3), (28, 30, 34), dtype=np.uint8)
+    cv2.putText(imagen, camara_id, (24, 42), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (240, 240, 240), 2, cv2.LINE_AA)
+    cv2.putText(imagen, str(fuente)[:70], (24, 76), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (190, 190, 190), 1, cv2.LINE_AA)
+    cv2.putText(imagen, estado or "esperando senal", (24, alto // 2), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 180, 255), 2, cv2.LINE_AA)
+    return imagen
+
+
+def componer_cuadricula(vistas: List[np.ndarray], ancho: int, alto: int) -> np.ndarray:
+    """Compone cuatro vistas en una cuadricula 2x2."""
+    while len(vistas) < 4:
+        vistas.append(np.zeros((alto, ancho, 3), dtype=np.uint8))
+    fila_1 = np.hstack(vistas[:2])
+    fila_2 = np.hstack(vistas[2:4])
+    return np.vstack([fila_1, fila_2])
+
+
+def ejecutar_inferencia_multicamara(configuracion: dict, fuentes: List[Tuple[str, str]]) -> None:
+    """Ejecuta inferencia de hasta cuatro camaras en una pantalla 2x2."""
+    configurar_uso_cpu(configuracion, multicamara=True)
+    multi = configuracion.get("multicamara", {})
+    ancho_proceso = int(multi.get("ancho_proceso", 640))
+    ancho_celda = int(multi.get("ancho_celda", 640))
+    alto_celda = int(multi.get("alto_celda", 360))
+    intervalo = max(0.01, int(multi.get("intervalo_inferencia_ms", 120)) / 1000.0)
+    tamano_yolo = int(multi.get("tamano_yolo", 416))
+    if tamano_yolo > 0:
+        yolo = configuracion.setdefault("yolo", {})
+        yolo["tamano_imagen"] = min(int(yolo.get("tamano_imagen", tamano_yolo)), tamano_yolo)
+
+    carpeta_registros = Path(configuracion["rutas"]["registros"])
+    carpeta_registros.mkdir(parents=True, exist_ok=True)
+
+    lectores: List[LectorCamara] = []
+    for camara_id, fuente in fuentes[:4]:
+        try:
+            entrada, tipo = abrir_fuente(fuente)
+        except Exception as exc:
+            print(f"[AVISO] {camara_id}: no se pudo abrir {fuente}: {exc}")
+            lectores.append(LectorCamara(camara_id=camara_id, fuente=str(fuente), captura=None, error="no disponible"))
+            continue
+        if tipo != "video":
+            print(f"[AVISO] {camara_id}: la fuente no es video/camara: {fuente}")
+            lectores.append(LectorCamara(camara_id=camara_id, fuente=str(fuente), captura=None, error="no es video"))
+            continue
+        optimizar_captura(entrada, ancho=ancho_proceso, alto=alto_celda)
+        lector = LectorCamara(camara_id=camara_id, fuente=str(fuente), captura=entrada)
+        lector.iniciar()
+        lectores.append(lector)
+
+    if not lectores:
+        raise RuntimeError("No hay fuentes de video para la vista multicamara.")
+    if not any(lector.activa for lector in lectores):
+        for lector in lectores:
+            lector.detener()
+        raise RuntimeError("No se pudo abrir ninguna camara para la vista multicamara.")
+
+    motor = MotorInferencia(configuracion)
+    motor.cargar_modelos()
+    nombre_ventana = "Re-ID PC Python | 4 camaras"
+    cv2.namedWindow(nombre_ventana, cv2.WINDOW_NORMAL)
+
+    resultados_por_camara: Dict[str, List[ResultadoIdentidad]] = {lector.camara_id: [] for lector in lectores}
+    fps_por_camara: Dict[str, float] = {lector.camara_id: 0.0 for lector in lectores}
+    ultimo_proceso: Dict[str, float] = {lector.camara_id: 0.0 for lector in lectores}
+    indice_turno = 0
+    total_procesados = 0
+    ruta_log = carpeta_registros / "predicciones_multicamara.csv"
+
+    print("[INFO] Inferencia multicamara iniciada. Presiona 'q' para salir, 'd' para diagnostico.")
+    try:
+        while True:
+            ahora = time.time()
+            for _ in range(len(lectores)):
+                lector = lectores[indice_turno % len(lectores)]
+                indice_turno += 1
+                frame, frame_numero = lector.obtener_frame()
+                if frame is None or ahora - ultimo_proceso[lector.camara_id] < intervalo:
+                    continue
+
+                frame_proceso = redimensionar_para_inferencia(frame, ancho_proceso)
+                inicio = time.time()
+                resultados = motor.procesar_frame(frame_proceso)
+                duracion = max(0.001, time.time() - inicio)
+                fps = 1.0 / duracion
+                resultados_por_camara[lector.camara_id] = resultados
+                fps_por_camara[lector.camara_id] = fps
+                ultimo_proceso[lector.camara_id] = time.time()
+                total_procesados += 1
+                guardar_log_predicciones_camara(ruta_log, lector.camara_id, frame_numero, resultados, fps)
+                break
+
+            vistas: List[np.ndarray] = []
+            for lector in lectores[:4]:
+                frame, frame_numero = lector.obtener_frame()
+                if frame is None:
+                    vistas.append(crear_placeholder_camara(lector.camara_id, lector.fuente, ancho_celda, alto_celda, lector.error))
+                    continue
+                frame_base = redimensionar_para_inferencia(frame, ancho_proceso)
+                salida = dibujar_resultados(frame_base, resultados_por_camara.get(lector.camara_id, []))
+                salida = dibujar_etiqueta_camara(
+                    salida,
+                    lector.camara_id,
+                    lector.fuente,
+                    fps_por_camara.get(lector.camara_id, 0.0),
+                    frame_numero,
+                )
+                vistas.append(ajustar_a_celda(salida, ancho_celda, alto_celda))
+
+            cv2.imshow(nombre_ventana, componer_cuadricula(vistas, ancho_celda, alto_celda))
+            tecla = cv2.waitKey(1) & 0xFF
+            if tecla == ord("d"):
+                print("[INFO] Generando diagnostico facial...")
+                try:
+                    ejecutar_diagnostico(configuracion)
+                except Exception as exc:
+                    print(f"[AVISO] No se pudo generar diagnostico: {exc}")
+            if tecla == ord("q"):
+                break
+    finally:
+        for lector in lectores:
+            lector.detener()
+        cv2.destroyAllWindows()
+
+    print(f"[OK] Inferencia multicamara finalizada. Ciclos de inferencia: {total_procesados}")
+    print(f"[OK] Logs: {ruta_log}")
+
+
 def ejecutar_inferencia(configuracion: dict, fuente: str) -> None:
     """Ejecuta inferencia sobre imagen, video, URL o cámara."""
+    configurar_uso_cpu(configuracion, multicamara=False)
     motor = MotorInferencia(configuracion)
     motor.cargar_modelos()
     entrada, tipo = abrir_fuente(fuente)
@@ -270,7 +608,15 @@ def main() -> None:
         return
 
     if argumentos.modo == "inferir":
-        ejecutar_inferencia(configuracion, fuente)
+        multi = configuracion.get("multicamara", {})
+        inferir_sin_fuente = argumentos.fuente is None
+        mostrar = bool(configuracion.get("ejecucion", {}).get("mostrar_ventana", True))
+        if inferir_sin_fuente and mostrar and bool(multi.get("activo_sin_fuente_en_inferir", True)):
+            max_camaras = int(multi.get("max_camaras", 4))
+            fuentes = obtener_fuentes_multicamara(configuracion, max_camaras=max_camaras)
+            ejecutar_inferencia_multicamara(configuracion, fuentes)
+        else:
+            ejecutar_inferencia(configuracion, fuente)
         return
 
 
