@@ -51,3 +51,5 @@ pruebas/Imagenes nuevas/**
 
 # Renders temporales de documentacion.
 info/render_docx/
+
+info/*
