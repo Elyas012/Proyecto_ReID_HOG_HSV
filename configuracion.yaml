@@ -26,6 +26,19 @@ multicamara:
   intervalo_inferencia_ms: 120
   tamano_yolo: 416
 
+# Ajustes para cargar videos desde archivo. Evita ventanas gigantes y mejora fluidez.
+video:
+  ancho_proceso: 960
+  ancho_vista: 960
+  alto_vista: 540
+  procesar_cada_n_frames: 2
+  inferencia_async: true
+  respetar_fps: true
+  saltar_frames_atrasados: true
+  max_salto_frames: 30
+  fps_por_defecto: 15
+  tamano_yolo: 416
+
 panel_control:
   activo: true
 
@@ -69,7 +82,7 @@ caracteristicas:
 aprendizaje_reid_en_vivo:
   activo: true
   minimo_por_identidad: 4
-  reentrenar_cada: 8
+  reentrenar_cada: 5
   modelo_salida: svm_reidentificacion_en_vivo.pkl
   usar_modelo_en_vivo: true
 

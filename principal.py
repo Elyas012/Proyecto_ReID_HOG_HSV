@@ -308,6 +308,23 @@ def redimensionar_para_inferencia(frame: np.ndarray, ancho_maximo: int) -> np.nd
     return cv2.resize(frame, nuevo_tamano, interpolation=cv2.INTER_AREA)
 
 
+def es_archivo_video(fuente: str) -> bool:
+    """Indica si la fuente apunta a un archivo de video local."""
+    ruta = Path(str(fuente))
+    if not ruta.exists() or not ruta.is_file():
+        return False
+    return ruta.suffix.lower() in {".mp4", ".avi", ".mov", ".mkv", ".webm", ".m4v", ".wmv"}
+
+
+def dibujar_barra_video(frame: np.ndarray, fps: float, frame_numero: int) -> np.ndarray:
+    """Dibuja una barra compacta para videos cargados desde archivo."""
+    salida = frame.copy()
+    texto = f"Video | FPS inf {fps:.1f} | frame {frame_numero} | q salir"
+    cv2.rectangle(salida, (0, 0), (salida.shape[1], 32), (20, 20, 20), -1)
+    cv2.putText(salida, texto, (10, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (235, 235, 235), 1, cv2.LINE_AA)
+    return salida
+
+
 def ajustar_a_celda(frame: np.ndarray, ancho: int, alto: int) -> np.ndarray:
     """Encaja un frame en una celda fija sin deformarlo."""
     lienzo = np.zeros((alto, ancho, 3), dtype=np.uint8)
@@ -485,14 +502,67 @@ def ejecutar_inferencia(configuracion: dict, fuente: str) -> None:
     if not captura.isOpened():
         raise RuntimeError(f"No se pudo abrir la fuente de video: {fuente}")
 
+    fuente_es_video = es_archivo_video(fuente)
+    video_config = configuracion.get("video", {})
+    ancho_video = int(video_config.get("ancho_proceso", 960))
+    ancho_vista_video = int(video_config.get("ancho_vista", 960))
+    alto_vista_video = int(video_config.get("alto_vista", 540))
+    procesar_cada = max(1, int(video_config.get("procesar_cada_n_frames", 2)))
+    inferencia_async_video = bool(video_config.get("inferencia_async", True))
+    respetar_fps_video = bool(video_config.get("respetar_fps", True))
+    saltar_atrasados = bool(video_config.get("saltar_frames_atrasados", True))
+    max_salto_frames = max(0, int(video_config.get("max_salto_frames", 30)))
+    tamano_yolo_video = int(video_config.get("tamano_yolo", 416))
+    if fuente_es_video and tamano_yolo_video > 0:
+        yolo = configuracion.setdefault("yolo", {})
+        yolo["tamano_imagen"] = min(int(yolo.get("tamano_imagen", tamano_yolo_video)), tamano_yolo_video)
+
     frame_numero = 0
     ultimo_tiempo = time.time()
+    inicio_reproduccion = time.time()
+    fps_video_origen = float(captura.get(cv2.CAP_PROP_FPS) or 0.0)
+    if fps_video_origen <= 1.0 or fps_video_origen > 120.0:
+        fps_video_origen = float(video_config.get("fps_por_defecto", 30))
+    duracion_frame_video = 1.0 / max(1.0, fps_video_origen)
+    resultados_ultimo: List[ResultadoIdentidad] = []
+    fps_ultimo = 0.0
+    lock_inferencia = threading.Lock()
+    hilo_inferencia: Optional[threading.Thread] = None
+    inferencia_ocupada = False
     mostrar = bool(configuracion.get("ejecucion", {}).get("mostrar_ventana", True))
     usar_panel = bool(configuracion.get("panel_control", {}).get("activo", True))
-    nombre_ventana = "Re-ID PC Python"
+    nombre_ventana = "Re-ID Video" if fuente_es_video else "Re-ID PC Python"
     panel = PanelControlInferencia(nombre_ventana, configuracion) if mostrar and usar_panel else None
     if mostrar and panel is None:
         cv2.namedWindow(nombre_ventana, cv2.WINDOW_NORMAL)
+
+    def lanzar_inferencia_video(frame_modelo: np.ndarray, numero_frame: int) -> None:
+        """Procesa inferencia de video sin bloquear la reproduccion."""
+        nonlocal resultados_ultimo, fps_ultimo, hilo_inferencia, inferencia_ocupada
+
+        with lock_inferencia:
+            if inferencia_ocupada:
+                return
+            inferencia_ocupada = True
+
+        def tarea() -> None:
+            nonlocal resultados_ultimo, fps_ultimo, inferencia_ocupada
+            try:
+                inicio = time.time()
+                resultados = motor.procesar_frame(frame_modelo)
+                fps_inferencia = 1.0 / max(0.001, time.time() - inicio)
+                guardar_log_predicciones(carpeta_registros / "predicciones.csv", numero_frame, resultados, fps_inferencia)
+                with lock_inferencia:
+                    resultados_ultimo = resultados
+                    fps_ultimo = fps_inferencia
+            except Exception as exc:
+                print(f"[AVISO] Inferencia de video fallida: {exc}")
+            finally:
+                with lock_inferencia:
+                    inferencia_ocupada = False
+
+        hilo_inferencia = threading.Thread(target=tarea, name="inferencia-video", daemon=True)
+        hilo_inferencia.start()
 
     while True:
         ok, frame = captura.read()
@@ -504,15 +574,36 @@ def ejecutar_inferencia(configuracion: dict, fuente: str) -> None:
         fps = 1.0 / max(0.001, ahora - ultimo_tiempo)
         ultimo_tiempo = ahora
 
-        resultados = motor.procesar_frame(frame)
-        salida = dibujar_resultados(frame, resultados)
-        guardar_log_predicciones(carpeta_registros / "predicciones.csv", frame_numero, resultados, fps)
+        frame_proceso = redimensionar_para_inferencia(frame, ancho_video) if fuente_es_video else frame
+        debe_procesar = not fuente_es_video or not resultados_ultimo or (frame_numero - 1) % procesar_cada == 0
+        if fuente_es_video and inferencia_async_video:
+            if debe_procesar:
+                lanzar_inferencia_video(frame_proceso.copy(), frame_numero)
+        elif debe_procesar:
+            inicio = time.time()
+            resultados_ultimo = motor.procesar_frame(frame_proceso)
+            fps_ultimo = 1.0 / max(0.001, time.time() - inicio)
+            guardar_log_predicciones(carpeta_registros / "predicciones.csv", frame_numero, resultados_ultimo, fps_ultimo)
+
+        with lock_inferencia:
+            resultados = list(resultados_ultimo)
+            fps_mostrar = fps_ultimo if fuente_es_video else fps
+        salida = dibujar_resultados(frame_proceso, resultados)
+        if fuente_es_video:
+            salida = ajustar_a_celda(salida, ancho_vista_video, alto_vista_video)
+        if fuente_es_video and panel is None:
+            salida = dibujar_barra_video(salida, fps_mostrar, frame_numero)
 
         # Comentario clave: la ventana permite validar visualmente el prototipo durante la exposición.
         if mostrar:
-            vista = panel.construir_vista(salida, resultados, fps, frame_numero) if panel else salida
+            vista = panel.construir_vista(salida, resultados, fps_mostrar, frame_numero) if panel else salida
             cv2.imshow(nombre_ventana, vista)
-            tecla = cv2.waitKey(1) & 0xFF
+            espera_ms = 1
+            if fuente_es_video and respetar_fps_video:
+                objetivo = inicio_reproduccion + frame_numero * duracion_frame_video
+                espera = objetivo - time.time()
+                espera_ms = max(1, int(espera * 1000)) if espera > 0 else 1
+            tecla = cv2.waitKey(espera_ms) & 0xFF
             if tecla == ord("d"):
                 print("[INFO] Generando diagnostico facial...")
                 try:
@@ -524,7 +615,22 @@ def ejecutar_inferencia(configuracion: dict, fuente: str) -> None:
             if tecla == ord("q"):
                 break
 
+            if fuente_es_video and respetar_fps_video and saltar_atrasados and max_salto_frames > 0:
+                objetivo = inicio_reproduccion + frame_numero * duracion_frame_video
+                retraso = time.time() - objetivo
+                frames_a_saltar = min(max_salto_frames, max(0, int(retraso / duracion_frame_video)))
+                video_finalizado = False
+                for _ in range(frames_a_saltar):
+                    if not captura.grab():
+                        video_finalizado = True
+                        break
+                    frame_numero += 1
+                if video_finalizado:
+                    break
+
     captura.release()
+    if hilo_inferencia and hilo_inferencia.is_alive():
+        hilo_inferencia.join(timeout=1.0)
     if mostrar:
         cv2.destroyAllWindows()
     print(f"[OK] Inferencia finalizada. Frames procesados: {frame_numero}")
