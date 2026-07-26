@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import csv
 from pathlib import Path
 from typing import Dict, Iterable, Optional
 
@@ -20,6 +21,7 @@ class PanelControlInferencia:
         self.configuracion = configuracion
         self.ancho = ancho
         self.diagnostico = self._cargar_diagnostico()
+        self.resumen_entrenamiento = self._cargar_resumen_entrenamiento()
         self.sliders_activos = False
         self.scroll_y = 0
         self.max_scroll_y = 0
@@ -73,6 +75,7 @@ class PanelControlInferencia:
 
     def recargar_diagnostico(self) -> None:
         self.diagnostico = self._cargar_diagnostico()
+        self.resumen_entrenamiento = self._cargar_resumen_entrenamiento()
 
     def _cargar_diagnostico(self) -> Optional[Dict[str, object]]:
         ruta = Path(str(self.configuracion.get("rutas", {}).get("reportes", "reportes"))) / "diagnostico_rostro.json"
@@ -83,6 +86,46 @@ class PanelControlInferencia:
                 return json.load(archivo)
         except (OSError, json.JSONDecodeError):
             return None
+
+    def _cargar_resumen_entrenamiento(self) -> Optional[Dict[str, object]]:
+        rutas = self.configuracion.get("rutas", {})
+        ruta = Path(str(rutas.get("reportes", "reportes"))) / "resumen_entrenamiento.json"
+        if not ruta.exists():
+            return self._cargar_resumen_desde_metadata()
+        try:
+            with ruta.open("r", encoding="utf-8") as archivo:
+                return json.load(archivo)
+        except (OSError, json.JSONDecodeError):
+            return self._cargar_resumen_desde_metadata()
+
+    def _cargar_resumen_desde_metadata(self) -> Optional[Dict[str, object]]:
+        ruta = Path(str(self.configuracion.get("rutas", {}).get("registros", "registros"))) / "metadata_entrenamiento.csv"
+        if not ruta.exists():
+            return None
+        conteo_rostro: Dict[str, int] = {}
+        conteo_reid: Dict[str, int] = {}
+        try:
+            with ruta.open("r", encoding="utf-8", newline="") as archivo:
+                for fila in csv.DictReader(archivo):
+                    identidad = str(fila.get("identidad", "")).strip()
+                    tipo = str(fila.get("tipo", "")).strip()
+                    if not identidad:
+                        continue
+                    if tipo == "rostro":
+                        conteo_rostro[identidad] = conteo_rostro.get(identidad, 0) + 1
+                    elif tipo == "reidentificacion":
+                        conteo_reid[identidad] = conteo_reid.get(identidad, 0) + 1
+        except OSError:
+            return None
+        entrenamiento = self.configuracion.get("entrenamiento", {})
+        return {
+            "fecha": f"metadata: {ruta.name}",
+            "max_muestras_por_clase": int(entrenamiento.get("max_muestras_por_clase", 0)),
+            "omitir_rostros_sin_roi": bool(entrenamiento.get("omitir_rostros_sin_roi", True)),
+            "conteo_rostro_usado": dict(sorted(conteo_rostro.items())),
+            "conteo_reid_usado": dict(sorted(conteo_reid.items())),
+            "modelos_entrenados": [],
+        }
 
     def construir_vista(self, frame: np.ndarray, resultados: Iterable[ResultadoIdentidad], fps: float, frame_numero: int) -> np.ndarray:
         self.actualizar_configuracion()
@@ -117,18 +160,38 @@ class PanelControlInferencia:
         y = self._separador(panel_contenido, y)
 
         y = self._texto(panel_contenido, "Diagnostico entrenamiento", 22, y, color=(255, 255, 255), grosor=2, avance=28)
-        if self.diagnostico:
+        if self.resumen_entrenamiento:
+            max_imgs = int(self.resumen_entrenamiento.get("max_muestras_por_clase", 0))
+            texto_max = "todas" if max_imgs <= 0 else str(max_imgs)
+            fecha = str(self.resumen_entrenamiento.get("fecha", "sin fecha"))
+            omitir = bool(self.resumen_entrenamiento.get("omitir_rostros_sin_roi", True))
+            y = self._texto(panel_contenido, f"Ultimo entreno: {fecha}", 28, y, color=(220, 220, 220), escala=0.45, avance=22)
+            y = self._texto(panel_contenido, f"Max imgs/clase: {texto_max}", 28, y, color=(220, 220, 220), avance=24)
+            y = self._texto(panel_contenido, f"Sin ROI: {'omitidas' if omitir else 'usadas completas'}", 28, y, color=(220, 220, 220), escala=0.48, avance=22)
+            if self.diagnostico:
+                y = self._texto(panel_contenido, f"Accuracy diag: {float(self.diagnostico.get('accuracy', 0.0)):.3f}", 28, y, color=(220, 220, 220), avance=24)
+                y = self._texto(panel_contenido, f"F1 diag: {float(self.diagnostico.get('f1_macro', 0.0)):.3f}", 28, y, color=(220, 220, 220), avance=24)
+            conteo = self.resumen_entrenamiento.get("conteo_rostro_usado", {})
+            y = self._texto(panel_contenido, "Rostros usados entreno:", 28, y, color=(210, 210, 210), avance=22)
+            for nombre, total in list(conteo.items())[:10]:
+                y = self._texto(panel_contenido, f"{nombre}: {total}", 42, y, color=(185, 185, 185), escala=0.45, avance=19)
+            conteo_reid = self.resumen_entrenamiento.get("conteo_reid_usado", {})
+            if conteo_reid:
+                y = self._texto(panel_contenido, "Re-ID usado entreno:", 28, y, color=(210, 210, 210), avance=22)
+                for nombre, total in list(conteo_reid.items())[:6]:
+                    y = self._texto(panel_contenido, f"{nombre}: {total}", 42, y, color=(185, 185, 185), escala=0.45, avance=19)
+        elif self.diagnostico:
             max_imgs = int(self.configuracion.get("entrenamiento", {}).get("max_muestras_por_clase", 0))
             texto_max = "todas" if max_imgs <= 0 else str(max_imgs)
             y = self._texto(panel_contenido, f"Max imgs/clase: {texto_max}", 28, y, color=(220, 220, 220), avance=24)
             y = self._texto(panel_contenido, f"Accuracy rostro: {float(self.diagnostico.get('accuracy', 0.0)):.3f}", 28, y, color=(220, 220, 220), avance=24)
             y = self._texto(panel_contenido, f"F1 macro: {float(self.diagnostico.get('f1_macro', 0.0)):.3f}", 28, y, color=(220, 220, 220), avance=24)
             conteo = self.diagnostico.get("conteo_usado", {})
-            y = self._texto(panel_contenido, "Muestras usadas:", 28, y, color=(210, 210, 210), avance=22)
+            y = self._texto(panel_contenido, "Muestras usadas diagnostico:", 28, y, color=(210, 210, 210), avance=22)
             for nombre, total in list(conteo.items())[:8]:
                 y = self._texto(panel_contenido, f"{nombre}: {total}", 42, y, color=(185, 185, 185), escala=0.45, avance=19)
         else:
-            y = self._texto(panel_contenido, "Ejecuta: --modo diagnostico", 28, y, color=(170, 170, 170), avance=24)
+            y = self._texto(panel_contenido, "Ejecuta: --modo entrenar", 28, y, color=(170, 170, 170), avance=24)
         y = self._separador(panel_contenido, y)
 
         y = self._texto(panel_contenido, "Teclas: q salir | d diagnostico", 22, y, color=(180, 205, 255), escala=0.48, avance=22)

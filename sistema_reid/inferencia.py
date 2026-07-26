@@ -77,6 +77,50 @@ class MotorInferencia:
                 nombre_modelo=str(aprendizaje.get("modelo_salida", "svm_reidentificacion_en_vivo.pkl")),
             )
 
+    def _detectar_rostro_con_zoom(self, deteccion_persona: Deteccion) -> Optional[Deteccion]:
+        """Segundo intento: recorta cabeza/torso superior, amplia y busca rostro."""
+        config_zoom = self.configuracion.get("rostro_en_persona", {})
+        if not bool(config_zoom.get("usar_zoom_si_no_detecta", True)):
+            return None
+
+        roi_persona = deteccion_persona.roi
+        if roi_persona is None or roi_persona.size == 0:
+            return None
+
+        alto, ancho = roi_persona.shape[:2]
+        porcentaje_superior = float(config_zoom.get("porcentaje_superior", 0.45))
+        porcentaje_superior = max(0.10, min(1.0, porcentaje_superior))
+        y2_superior = max(1, min(alto, int(alto * porcentaje_superior)))
+        zona_superior = roi_persona[:y2_superior, :]
+        if zona_superior.size == 0:
+            return None
+
+        factor_zoom = float(config_zoom.get("factor_zoom", 2.5))
+        factor_zoom = max(1.0, min(5.0, factor_zoom))
+        ancho_zoom = max(1, int(zona_superior.shape[1] * factor_zoom))
+        alto_zoom = max(1, int(zona_superior.shape[0] * factor_zoom))
+        zona_zoom = cv2.resize(zona_superior, (ancho_zoom, alto_zoom), interpolation=cv2.INTER_CUBIC)
+
+        tamano_minimo_zoom = int(config_zoom.get("tamano_minimo_zoom", 24))
+        rostros = self.detector_rostros.detectar_rostros(zona_zoom, tamano_minimo=tamano_minimo_zoom)
+        if not rostros:
+            return None
+
+        rostro_zoom = rostros[0]
+        zx1, zy1, zx2, zy2 = rostro_zoom.caja
+        x1 = int(zx1 / factor_zoom)
+        y1 = int(zy1 / factor_zoom)
+        x2 = int(zx2 / factor_zoom)
+        y2 = int(zy2 / factor_zoom)
+        x1 = max(0, min(x1, ancho - 1))
+        y1 = max(0, min(y1, alto - 1))
+        x2 = max(x1 + 1, min(x2, ancho))
+        y2 = max(y1 + 1, min(y2, alto))
+        roi_rostro = roi_persona[y1:y2, x1:x2]
+        if roi_rostro.size == 0:
+            return None
+        return Deteccion(caja=(x1, y1, x2, y2), score=rostro_zoom.score, clase=0, roi=roi_rostro)
+
     def cargar_modelos(self) -> None:
         """Carga SVM facial, SVM Re-ID y el estado del entrenamiento Re-ID en vivo."""
         carpeta_modelos = Path(str(self.configuracion.get("rutas", {}).get("modelos", "modelos")))
@@ -207,8 +251,12 @@ class MotorInferencia:
         vector_hsv = extraer_histograma_hsv(torso)
 
         rostro = self.detector_rostros.detectar_rostro_principal(deteccion_persona.roi)
+        rostro_por_zoom = False
         if rostro is None:
-            return self._clasificar_reid(deteccion_persona, vector_hsv, "rostro_no_visible")
+            rostro = self._detectar_rostro_con_zoom(deteccion_persona)
+            rostro_por_zoom = rostro is not None
+        if rostro is None:
+            return self._clasificar_reid(deteccion_persona, vector_hsv, "rostro_no_visible_tras_zoom")
 
         if not rostro_es_util(rostro.roi, tamano_min, nitidez_min):
             return self._clasificar_reid(deteccion_persona, vector_hsv, "rostro_borroso_o_pequeno")
@@ -224,11 +272,11 @@ class MotorInferencia:
             estado_reid = self._actualizar_reid_en_vivo(identidad, vector_hsv)
             return ResultadoIdentidad(
                 identidad,
-                "rostro_hog_svm",
+                "rostro_hog_svm_zoom" if rostro_por_zoom else "rostro_hog_svm",
                 score,
                 deteccion_persona.caja,
                 ranking,
-                detalle="rostro visible reconocido; HSV guardado para entrenar Re-ID en vivo",
+                detalle=("rostro detectado con zoom; HSV guardado para entrenar Re-ID en vivo" if rostro_por_zoom else "rostro visible reconocido; HSV guardado para entrenar Re-ID en vivo"),
                 estado_reid_vivo=estado_reid,
             )
 

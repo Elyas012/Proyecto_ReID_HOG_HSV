@@ -38,7 +38,7 @@ python -c "from ultralytics import YOLO; YOLO('yolov8n.pt')"
 python principal.py
 ```
 
-Abre una ventana basica con botones usando Tkinter. Desde ahi puedes elegir inferencia con 4 camaras, camara individual, imagen, video, entrenar, revisar conteos y registrar muestras. Si Tkinter no esta disponible en tu instalacion de Python, cae al menu de consola.
+Abre una ventana basica con botones usando Tkinter. Desde ahi puedes elegir inferencia con 4 camaras, camara individual, imagen, video, entrenar, actualizar reportes, revisar conteos y registrar muestras. Si Tkinter no esta disponible en tu instalacion de Python, cae al menu de consola.
 
 ### 1. Revisar estado
 
@@ -115,8 +115,7 @@ modelos/                       # svm_rostro.pkl y svm_reidentificacion.pkl
 modelos/buffer_reid_hsv_en_vivo.npz # HSV recolectado durante inferencia
 registros/                     # logs y metadata CSV
 salidas/                       # imágenes procesadas
-experimentos/                  # videos E1, E2 y E3
-camaras_moviles/               # fuentes de celulares/cámaras
+reportes/                      # diagnostico, matriz de confusion y metricas
 ```
 
 ## Tecla de salida

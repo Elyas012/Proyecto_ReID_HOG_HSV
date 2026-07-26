@@ -9,6 +9,5 @@ modelos/*.pt
 salidas/*
 registros/*
 reportes/*
-!*/.gitkeep
 datos/*
 venv/*

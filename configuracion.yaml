@@ -70,6 +70,14 @@ umbrales:
   nitidez_minima: 60.0
   tamano_minimo_rostro: 40
 
+# Segundo intento antes de activar Re-ID: busca rostro con zoom en la parte superior
+# de la persona detectada, util para videos de pasillos/camaras lejanas.
+rostro_en_persona:
+  usar_zoom_si_no_detecta: true
+  factor_zoom: 3.0
+  porcentaje_superior: 0.45
+  tamano_minimo_zoom: 24
+
 caracteristicas:
   descriptor_rostro: hog
   descriptor_reid: hsv
@@ -90,9 +98,6 @@ rutas:
   datos: datos
   rostros: datos/rostros
   reidentificacion: datos/reidentificacion
-  pruebas_rostros: datos/pruebas/rostros
-  pruebas_reidentificacion: datos/pruebas/reidentificacion
-  desconocidos: datos/desconocidos
   modelos: modelos
   salidas: salidas
   reportes: reportes
@@ -106,3 +111,7 @@ entrenamiento:
   probabilidad: true
   # 0 usa todas las imagenes disponibles en cada carpeta/clase.
   max_muestras_por_clase: 0
+  # true = omite imagenes donde no detecta ROI facial.
+  # false = entrena tambien esas imagenes usando la imagen completa.
+  # Solo afecta --modo entrenar.
+  omitir_rostros_sin_roi: false

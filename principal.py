@@ -116,6 +116,15 @@ def ejecutar_diagnostico(configuracion: dict) -> None:
     print(f"[OK] Matriz imagen: {carpeta_reportes / 'matriz_confusion_rostro.jpg'}")
 
 
+def actualizar_reportes(configuracion: dict) -> None:
+    """Regenera los archivos principales de la carpeta reportes."""
+    carpeta_reportes = Path(configuracion["rutas"]["reportes"])
+    carpeta_reportes.mkdir(parents=True, exist_ok=True)
+    print("[INFO] Actualizando carpeta de reportes...")
+    ejecutar_diagnostico(configuracion)
+    print(f"[OK] Carpeta actualizada: {carpeta_reportes}")
+
+
 def abrir_fuente(fuente: str):
     """Abre una imagen, video, URL o cámara según el valor recibido."""
     fuente = str(fuente)
@@ -733,6 +742,7 @@ def ejecutar_menu_consola(configuracion: dict) -> None:
         print("8. Registrar rostro")
         print("9. Registrar Re-ID torso/ropa")
         print("10. Registrar rostro + Re-ID")
+        print("11. Actualizar carpeta reportes")
         print("0. Salir")
 
         opcion = input("Opcion: ").strip()
@@ -768,6 +778,9 @@ def ejecutar_menu_consola(configuracion: dict) -> None:
                 ejecutar_registro_desde_menu(configuracion, "reid")
             elif opcion == "10":
                 ejecutar_registro_desde_menu(configuracion, "ambos")
+            elif opcion == "11":
+                actualizar_reportes(configuracion)
+                pausar_menu()
             elif opcion == "0":
                 print("[OK] Saliendo.")
                 return
@@ -915,6 +928,13 @@ def ejecutar_menu(configuracion: dict) -> None:
         except Exception as exc:
             messagebox.showerror("Error", str(exc))
 
+    def actualizar_reportes_menu() -> None:
+        try:
+            escribir_salida(capturar_salida(actualizar_reportes, configuracion))
+            messagebox.showinfo("Reportes", "Carpeta reportes actualizada.")
+        except Exception as exc:
+            messagebox.showerror("Error", str(exc))
+
     def registrar_menu(modo_captura: str) -> None:
         identidad = simpledialog.askstring("Registro", "Identidad/persona:", parent=root)
         if not identidad:
@@ -966,6 +986,7 @@ def ejecutar_menu(configuracion: dict) -> None:
     boton("8. Registrar rostro", lambda: registrar_menu("rostro"), color_boton_sec)
     boton("9. Registrar Re-ID torso/ropa", lambda: registrar_menu("reid"), color_boton_sec)
     boton("10. Registrar rostro + Re-ID", lambda: registrar_menu("ambos"), color_boton_sec)
+    boton("11. Actualizar reportes", actualizar_reportes_menu, color_boton_sec)
 
     tk.Button(
         panel_botones,

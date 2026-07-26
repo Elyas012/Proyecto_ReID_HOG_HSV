@@ -9,7 +9,9 @@ HSV y luego entrena el SVM Re-ID cuando existan suficientes identidades.
 from __future__ import annotations
 
 import csv
+import json
 import time
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Tuple
@@ -67,6 +69,35 @@ def registrar_metadata(ruta_csv: Path, fila: Dict[str, object]) -> None:
         if not existe:
             escritor.writeheader()
         escritor.writerow(fila)
+
+
+def contar_muestras(muestras: Iterable[object]) -> Dict[str, int]:
+    """Cuenta muestras por identidad para reportar el entrenamiento usado."""
+    conteo = Counter(str(muestra.identidad) for muestra in muestras)
+    return {identidad: conteo[identidad] for identidad in sorted(conteo)}
+
+
+def guardar_resumen_entrenamiento(
+    configuracion: Dict[str, object],
+    muestras_rostro: Iterable[object],
+    muestras_reid: Iterable[object],
+    modelos: Dict[str, object],
+) -> None:
+    """Guarda un resumen ligero del ultimo entrenamiento para el panel."""
+    rutas = configuracion["rutas"]
+    entrenamiento = configuracion.get("entrenamiento", {})
+    ruta_resumen = Path(rutas["reportes"]) / "resumen_entrenamiento.json"
+    ruta_resumen.parent.mkdir(parents=True, exist_ok=True)
+    resumen = {
+        "fecha": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "max_muestras_por_clase": int(entrenamiento.get("max_muestras_por_clase", 0)),
+        "omitir_rostros_sin_roi": bool(entrenamiento.get("omitir_rostros_sin_roi", True)),
+        "conteo_rostro_usado": contar_muestras(muestras_rostro),
+        "conteo_reid_usado": contar_muestras(muestras_reid),
+        "modelos_entrenados": sorted(modelos.keys()),
+    }
+    with ruta_resumen.open("w", encoding="utf-8") as archivo:
+        json.dump(resumen, archivo, ensure_ascii=False, indent=2)
 
 
 def capturar_muestras_tiempo_real(
@@ -192,11 +223,13 @@ def entrenar_desde_capturas(configuracion: Dict[str, object]) -> Dict[str, objec
 
     max_muestras = int(entrenamiento.get("max_muestras_por_clase", 0))
     semilla = int(entrenamiento.get("semilla", 42))
+    omitir_sin_roi = bool(entrenamiento.get("omitir_rostros_sin_roi", True))
 
     vectores_rostro, etiquetas_rostro, muestras_rostro = construir_dataset_rostros(
         rutas["rostros"],
         max_muestras_por_clase=max_muestras,
         semilla=semilla,
+        omitir_sin_roi=omitir_sin_roi,
     )
     vectores_reid, etiquetas_reid, muestras_reid = construir_dataset_reid(
         rutas["reidentificacion"],
@@ -218,6 +251,7 @@ def entrenar_desde_capturas(configuracion: Dict[str, object]) -> Dict[str, objec
         max_muestras_por_clase=max_muestras,
         semilla=semilla,
     )
+    guardar_resumen_entrenamiento(configuracion, muestras_rostro, muestras_reid, modelos)
     return modelos
 
 

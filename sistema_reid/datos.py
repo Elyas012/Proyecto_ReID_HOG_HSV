@@ -98,6 +98,7 @@ def construir_dataset_rostros(
     carpeta_rostros: str | Path,
     max_muestras_por_clase: Optional[int] = None,
     semilla: int = 42,
+    omitir_sin_roi: bool = True,
 ) -> Tuple[np.ndarray, np.ndarray, List[MuestraImagen]]:
     """Construye vectores HoG y etiquetas desde datos/rostros/<identidad>."""
     muestras = listar_imagenes_por_identidad(carpeta_rostros, tipo="rostro")
@@ -106,20 +107,26 @@ def construir_dataset_rostros(
     etiquetas: List[str] = []
     muestras_usadas: List[MuestraImagen] = []
     omitidas = 0
+    usadas_sin_roi = 0
     detector_rostros = DetectorRostros()
 
     for muestra in muestras:
         imagen = cargar_imagen_bgr(muestra.ruta)
         roi_rostro = obtener_roi_rostro_entrenamiento(imagen, detector_rostros)
         if roi_rostro is None:
-            omitidas += 1
-            continue
+            if omitir_sin_roi:
+                omitidas += 1
+                continue
+            roi_rostro = imagen
+            usadas_sin_roi += 1
         vectores.append(extraer_hog_rostro(roi_rostro))
         etiquetas.append(muestra.identidad)
         muestras_usadas.append(muestra)
 
     if omitidas:
         print(f"[AVISO] Rostros omitidos por no detectar ROI facial: {omitidas}")
+    if usadas_sin_roi:
+        print(f"[AVISO] Rostros sin ROI usados con imagen completa: {usadas_sin_roi}")
     return np.asarray(vectores, dtype="float32"), np.asarray(etiquetas), muestras_usadas
 
 
