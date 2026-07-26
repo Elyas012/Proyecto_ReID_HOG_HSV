@@ -22,7 +22,8 @@ import numpy as np
 from .caracteristicas import extraer_histograma_hsv, extraer_hog_rostro, recortar_torso, rostro_es_util
 from .datos import construir_dataset_reid, construir_dataset_rostros, guardar_imagen_bgr, guardar_metadata_csv
 from .deteccion import Deteccion, DetectorPersonasYOLO, DetectorRostros
-from .modelos_svm import entrenar_modelos_principales
+from .evaluacion import evaluar_modelo
+from .modelos_svm import dividir_indices_validacion, entrenar_modelos_principales
 
 
 @dataclass
@@ -77,11 +78,48 @@ def contar_muestras(muestras: Iterable[object]) -> Dict[str, int]:
     return {identidad: conteo[identidad] for identidad in sorted(conteo)}
 
 
+def dividir_dataset_validacion(
+    vectores: np.ndarray,
+    etiquetas: np.ndarray,
+    muestras: List[object],
+    proporcion_validacion: float,
+    semilla: int,
+    validacion_por_clase: bool = True,
+) -> Tuple[np.ndarray, np.ndarray, List[object], np.ndarray, np.ndarray, List[object]]:
+    """Divide un dataset por identidad y conserva muestras suficientes para entrenar."""
+    if vectores is None or etiquetas is None or len(vectores) == 0 or proporcion_validacion <= 0:
+        return vectores, etiquetas, muestras, np.asarray([], dtype="float32"), np.asarray([]), []
+
+    etiquetas = np.asarray(etiquetas)
+    indices_entrenamiento, indices_validacion = dividir_indices_validacion(
+        etiquetas,
+        proporcion_validacion,
+        semilla=semilla,
+        validacion_por_clase=validacion_por_clase,
+    )
+    if len(indices_validacion) == 0:
+        return vectores, etiquetas, muestras, np.asarray([], dtype="float32"), np.asarray([]), []
+
+    muestras_entrenamiento = [muestras[indice] for indice in indices_entrenamiento]
+    muestras_validacion = [muestras[indice] for indice in indices_validacion]
+    return (
+        vectores[indices_entrenamiento],
+        etiquetas[indices_entrenamiento],
+        muestras_entrenamiento,
+        vectores[indices_validacion],
+        etiquetas[indices_validacion],
+        muestras_validacion,
+    )
+
+
 def guardar_resumen_entrenamiento(
     configuracion: Dict[str, object],
     muestras_rostro: Iterable[object],
     muestras_reid: Iterable[object],
     modelos: Dict[str, object],
+    muestras_rostro_validacion: Iterable[object] | None = None,
+    muestras_reid_validacion: Iterable[object] | None = None,
+    metricas_validacion: Dict[str, object] | None = None,
 ) -> None:
     """Guarda un resumen ligero del ultimo entrenamiento para el panel."""
     rutas = configuracion["rutas"]
@@ -91,9 +129,16 @@ def guardar_resumen_entrenamiento(
     resumen = {
         "fecha": time.strftime("%Y-%m-%d %H:%M:%S"),
         "max_muestras_por_clase": int(entrenamiento.get("max_muestras_por_clase", 0)),
+        "validacion": float(entrenamiento.get("validacion", 0.20)),
+        "validacion_por_clase": bool(entrenamiento.get("validacion_por_clase", True)),
         "omitir_rostros_sin_roi": bool(entrenamiento.get("omitir_rostros_sin_roi", True)),
+        "conteo_rostro_entrenamiento": contar_muestras(muestras_rostro),
+        "conteo_rostro_validacion": contar_muestras(muestras_rostro_validacion or []),
+        "conteo_reid_entrenamiento": contar_muestras(muestras_reid),
+        "conteo_reid_validacion": contar_muestras(muestras_reid_validacion or []),
         "conteo_rostro_usado": contar_muestras(muestras_rostro),
         "conteo_reid_usado": contar_muestras(muestras_reid),
+        "metricas_validacion": metricas_validacion or {},
         "modelos_entrenados": sorted(modelos.keys()),
     }
     with ruta_resumen.open("w", encoding="utf-8") as archivo:
@@ -224,6 +269,8 @@ def entrenar_desde_capturas(configuracion: Dict[str, object]) -> Dict[str, objec
     max_muestras = int(entrenamiento.get("max_muestras_por_clase", 0))
     semilla = int(entrenamiento.get("semilla", 42))
     omitir_sin_roi = bool(entrenamiento.get("omitir_rostros_sin_roi", True))
+    proporcion_validacion = float(entrenamiento.get("validacion", 0.20))
+    validacion_por_clase = bool(entrenamiento.get("validacion_por_clase", True))
 
     vectores_rostro, etiquetas_rostro, muestras_rostro = construir_dataset_rostros(
         rutas["rostros"],
@@ -238,20 +285,79 @@ def entrenar_desde_capturas(configuracion: Dict[str, object]) -> Dict[str, objec
     )
 
     # Comentario clave: se guarda metadata del entrenamiento para evidenciar qué muestras se usaron.
-    guardar_metadata_csv([*muestras_rostro, *muestras_reid], Path(rutas["registros"]) / "metadata_entrenamiento.csv")
-
-    modelos = entrenar_modelos_principales(
+    (
+        vectores_rostro_train,
+        etiquetas_rostro_train,
+        muestras_rostro_train,
+        vectores_rostro_val,
+        etiquetas_rostro_val,
+        muestras_rostro_val,
+    ) = dividir_dataset_validacion(
         vectores_rostro,
         etiquetas_rostro,
+        muestras_rostro,
+        proporcion_validacion,
+        semilla,
+        validacion_por_clase=validacion_por_clase,
+    )
+    (
+        vectores_reid_train,
+        etiquetas_reid_train,
+        muestras_reid_train,
+        vectores_reid_val,
+        etiquetas_reid_val,
+        muestras_reid_val,
+    ) = dividir_dataset_validacion(
         vectores_reid,
         etiquetas_reid,
+        muestras_reid,
+        proporcion_validacion,
+        semilla,
+        validacion_por_clase=validacion_por_clase,
+    )
+
+    print(f"[INFO] Split rostro train/val: {contar_muestras(muestras_rostro_train)} / {contar_muestras(muestras_rostro_val)}")
+    print(f"[INFO] Split Re-ID train/val: {contar_muestras(muestras_reid_train)} / {contar_muestras(muestras_reid_val)}")
+
+    guardar_metadata_csv([*muestras_rostro_train, *muestras_reid_train], Path(rutas["registros"]) / "metadata_entrenamiento.csv")
+    guardar_metadata_csv([*muestras_rostro_val, *muestras_reid_val], Path(rutas["registros"]) / "metadata_validacion.csv")
+
+    modelos = entrenar_modelos_principales(
+        vectores_rostro_train,
+        etiquetas_rostro_train,
+        vectores_reid_train,
+        etiquetas_reid_train,
         rutas["modelos"],
         kernel=str(entrenamiento.get("kernel", "rbf")),
         probabilidad=bool(entrenamiento.get("probabilidad", True)),
         max_muestras_por_clase=max_muestras,
         semilla=semilla,
     )
-    guardar_resumen_entrenamiento(configuracion, muestras_rostro, muestras_reid, modelos)
+    metricas_validacion: Dict[str, object] = {}
+    if "svm_rostro" in modelos and len(vectores_rostro_val) > 0:
+        metricas_validacion["rostro"] = evaluar_modelo(modelos["svm_rostro"], vectores_rostro_val, etiquetas_rostro_val)
+        print(
+            "[INFO] Validacion rostro: "
+            f"accuracy={metricas_validacion['rostro']['accuracy']:.3f} "
+            f"f1={metricas_validacion['rostro']['f1_macro']:.3f}"
+        )
+    if "svm_reidentificacion" in modelos and len(vectores_reid_val) > 0:
+        metricas_validacion["reid"] = evaluar_modelo(modelos["svm_reidentificacion"], vectores_reid_val, etiquetas_reid_val)
+        print(
+            "[INFO] Validacion Re-ID: "
+            f"accuracy={metricas_validacion['reid']['accuracy']:.3f} "
+            f"f1={metricas_validacion['reid']['f1_macro']:.3f}"
+        )
+
+    guardar_resumen_entrenamiento(
+        configuracion,
+        muestras_rostro_train,
+        muestras_reid_train,
+        modelos,
+        muestras_rostro_validacion=muestras_rostro_val,
+        muestras_reid_validacion=muestras_reid_val,
+        metricas_validacion=metricas_validacion,
+    )
     return modelos
 
 

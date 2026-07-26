@@ -9,5 +9,8 @@ modelos/*.pt
 salidas/*
 registros/*
 reportes/*
-datos/*
+datos/reidentificacion/*
+datos/rostros/*
 venv/*
+pruebas/videos/*
+pruebas/Imagenes nuevas/*

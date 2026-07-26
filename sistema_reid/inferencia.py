@@ -66,6 +66,8 @@ class MotorInferencia:
         aprendizaje = configuracion.get("aprendizaje_reid_en_vivo", {})
         self.aprendizaje_reid_activo = bool(aprendizaje.get("activo", True))
         self.usar_reid_en_vivo = bool(aprendizaje.get("usar_modelo_en_vivo", True))
+        self.score_rostro_min_aprendizaje = float(aprendizaje.get("score_rostro_min_aprendizaje", 0.90))
+        self.margen_rostro_min_aprendizaje = float(aprendizaje.get("margen_rostro_min_aprendizaje", 0.20))
         self.entrenador_reid: Optional[EntrenadorReIDEnVivo] = None
         if self.aprendizaje_reid_activo:
             self.entrenador_reid = EntrenadorReIDEnVivo(
@@ -75,6 +77,8 @@ class MotorInferencia:
                 kernel=str(configuracion.get("entrenamiento", {}).get("kernel", "rbf")),
                 probabilidad=bool(configuracion.get("entrenamiento", {}).get("probabilidad", True)),
                 nombre_modelo=str(aprendizaje.get("modelo_salida", "svm_reidentificacion_en_vivo.pkl")),
+                combinar_con_base=bool(aprendizaje.get("combinar_con_reid_fijo", True)),
+                max_muestras_vivas_por_identidad=int(aprendizaje.get("max_muestras_vivas_por_identidad", 80)),
             )
 
     def _detectar_rostro_con_zoom(self, deteccion_persona: Deteccion) -> Optional[Deteccion]:
@@ -134,20 +138,30 @@ class MotorInferencia:
 
         if ruta_reid.exists():
             modelo_reid_fijo = cargar_artefactos(ruta_reid)
-            if getattr(modelo_reid_fijo, "tipo", "") == "reid_hsv_svm_en_vivo":
+            if getattr(modelo_reid_fijo, "tipo", "") in {"reid_hsv_svm_en_vivo", "reid_hsv_svm_combinado"}:
                 print("[AVISO] modelos/svm_reidentificacion.pkl parece venir del entrenamiento en vivo anterior; no se carga como Re-ID fijo.")
             else:
                 self.modelo_reid = modelo_reid_fijo
 
         if self.entrenador_reid:
+            entrenamiento = self.configuracion.get("entrenamiento", {})
+            self.entrenador_reid.cargar_base_reid(
+                self.configuracion.get("rutas", {}).get("reidentificacion", "datos/reidentificacion"),
+                max_muestras_por_clase=int(entrenamiento.get("max_muestras_por_clase", 0)),
+                semilla=int(entrenamiento.get("semilla", 42)),
+            )
             self.entrenador_reid.cargar_estado()
+            if self.usar_reid_en_vivo and self.entrenador_reid.modelo is None and self.entrenador_reid.etiquetas:
+                self.entrenador_reid.entrenar_si_es_posible()
             if self.usar_reid_en_vivo and self.entrenador_reid.modelo is not None:
                 self.modelo_reid = self.entrenador_reid.modelo
 
-    def _actualizar_reid_en_vivo(self, identidad: str, vector_hsv: np.ndarray) -> Dict[str, int]:
+    def _actualizar_reid_en_vivo(self, identidad: str, vector_hsv: np.ndarray, score_rostro: float, margen_rostro: float) -> Dict[str, int]:
         """Alimenta el SVM Re-ID con HSV cuando el rostro ya fue reconocido correctamente."""
         if not self.entrenador_reid:
             return {}
+        if score_rostro < self.score_rostro_min_aprendizaje or margen_rostro < self.margen_rostro_min_aprendizaje:
+            return self.entrenador_reid.resumen()
 
         actualizado = self.entrenador_reid.agregar_muestra(identidad, vector_hsv)
         if actualizado and self.entrenador_reid.modelo is not None:
@@ -269,14 +283,18 @@ class MotorInferencia:
         margen = margen_ranking(ranking)
         if score >= score_rostro_min and margen >= margen_rostro_min:
             # Comentario clave: si el rostro fue reconocido, se acepta la identidad por HoG + SVM.
-            estado_reid = self._actualizar_reid_en_vivo(identidad, vector_hsv)
+            aprende_reid = score >= self.score_rostro_min_aprendizaje and margen >= self.margen_rostro_min_aprendizaje
+            estado_reid = self._actualizar_reid_en_vivo(identidad, vector_hsv, score, margen)
+            detalle = "HSV guardado para entrenar Re-ID combinado" if aprende_reid else "rostro reconocido; HSV no guardado por umbral de aprendizaje"
+            if rostro_por_zoom:
+                detalle = f"rostro detectado con zoom; {detalle}"
             return ResultadoIdentidad(
                 identidad,
                 "rostro_hog_svm_zoom" if rostro_por_zoom else "rostro_hog_svm",
                 score,
                 deteccion_persona.caja,
                 ranking,
-                detalle=("rostro detectado con zoom; HSV guardado para entrenar Re-ID en vivo" if rostro_por_zoom else "rostro visible reconocido; HSV guardado para entrenar Re-ID en vivo"),
+                detalle=detalle,
                 estado_reid_vivo=estado_reid,
             )
 

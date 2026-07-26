@@ -50,6 +50,7 @@ CONFIGURACION_DEFECTO: Dict[str, Any] = {
     "entrenamiento": {
         "kernel": "rbf",
         "validacion": 0.20,
+        "validacion_por_clase": True,
         "semilla": 42,
         "probabilidad": True,
         "max_muestras_por_clase": 0,
@@ -57,10 +58,14 @@ CONFIGURACION_DEFECTO: Dict[str, Any] = {
     },
     "aprendizaje_reid_en_vivo": {
         "activo": True,
+        "combinar_con_reid_fijo": True,
         "minimo_por_identidad": 4,
         "reentrenar_cada": 8,
-        "modelo_salida": "svm_reidentificacion_en_vivo.pkl",
+        "modelo_salida": "svm_reidentificacion_combinado.pkl",
         "usar_modelo_en_vivo": True,
+        "max_muestras_vivas_por_identidad": 80,
+        "score_rostro_min_aprendizaje": 0.90,
+        "margen_rostro_min_aprendizaje": 0.20,
     },
 }
 

@@ -80,6 +80,74 @@ def limitar_muestras_por_clase(
     return vectores[indices_seleccionados], etiquetas[indices_seleccionados]
 
 
+def dividir_indices_validacion_estratificada(
+    etiquetas: Sequence[str],
+    proporcion_validacion: float,
+    semilla: int = 42,
+    minimo_entrenamiento_por_clase: int = 2,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Separa indices train/validacion por identidad para no perder clases."""
+    etiquetas = np.asarray(etiquetas)
+    proporcion = max(0.0, min(0.8, float(proporcion_validacion)))
+    indices_entrenamiento: list[int] = []
+    indices_validacion: list[int] = []
+    rng = np.random.default_rng(semilla)
+
+    for clase in sorted(set(etiquetas)):
+        indices = np.flatnonzero(etiquetas == clase)
+        indices = rng.permutation(indices)
+        max_validacion = max(0, len(indices) - minimo_entrenamiento_por_clase)
+        total_validacion = int(round(len(indices) * proporcion))
+        total_validacion = max(0, min(max_validacion, total_validacion))
+        if proporcion > 0 and max_validacion > 0 and total_validacion == 0:
+            total_validacion = 1
+
+        indices_validacion.extend(indices[:total_validacion].tolist())
+        indices_entrenamiento.extend(indices[total_validacion:].tolist())
+
+    return np.asarray(sorted(indices_entrenamiento), dtype=int), np.asarray(sorted(indices_validacion), dtype=int)
+
+
+def dividir_indices_validacion(
+    etiquetas: Sequence[str],
+    proporcion_validacion: float,
+    semilla: int = 42,
+    validacion_por_clase: bool = True,
+    minimo_entrenamiento_por_clase: int = 2,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Divide indices para train/validacion, por clase o global, sin vaciar clases."""
+    if validacion_por_clase:
+        return dividir_indices_validacion_estratificada(
+            etiquetas,
+            proporcion_validacion,
+            semilla=semilla,
+            minimo_entrenamiento_por_clase=minimo_entrenamiento_por_clase,
+        )
+
+    etiquetas = np.asarray(etiquetas)
+    proporcion = max(0.0, min(0.8, float(proporcion_validacion)))
+    if len(etiquetas) == 0 or proporcion <= 0:
+        return np.arange(len(etiquetas), dtype=int), np.asarray([], dtype=int)
+
+    rng = np.random.default_rng(semilla)
+    objetivo_validacion = max(1, int(round(len(etiquetas) * proporcion)))
+    conteo_train = Counter(str(etiqueta) for etiqueta in etiquetas)
+    indices_validacion: list[int] = []
+
+    for indice in rng.permutation(len(etiquetas)):
+        if len(indices_validacion) >= objetivo_validacion:
+            break
+        clase = str(etiquetas[indice])
+        if conteo_train[clase] <= minimo_entrenamiento_por_clase:
+            continue
+        indices_validacion.append(int(indice))
+        conteo_train[clase] -= 1
+
+    indices_validacion_set = set(indices_validacion)
+    indices_entrenamiento = [indice for indice in range(len(etiquetas)) if indice not in indices_validacion_set]
+    return np.asarray(sorted(indices_entrenamiento), dtype=int), np.asarray(sorted(indices_validacion), dtype=int)
+
+
 def entrenar_svm(
     vectores: np.ndarray,
     etiquetas: np.ndarray,

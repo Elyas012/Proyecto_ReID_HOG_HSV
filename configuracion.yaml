@@ -89,10 +89,14 @@ caracteristicas:
 # por HoG + SVM facial, se guarda HSV del torso con esa identidad y se reentrena SVM Re-ID.
 aprendizaje_reid_en_vivo:
   activo: true
+  combinar_con_reid_fijo: true
   minimo_por_identidad: 4
   reentrenar_cada: 5
-  modelo_salida: svm_reidentificacion_en_vivo.pkl
+  modelo_salida: svm_reidentificacion_combinado.pkl
   usar_modelo_en_vivo: true
+  max_muestras_vivas_por_identidad: 80
+  score_rostro_min_aprendizaje: 0.90
+  margen_rostro_min_aprendizaje: 0.20
 
 rutas:
   datos: datos
@@ -106,7 +110,10 @@ rutas:
 entrenamiento:
   modelo: svm
   kernel: rbf
+  # 0.20 = 80% entrenamiento / 20% validacion.
+  # El split se hace por identidad para no dejar clases desbalanceadas.
   validacion: 0.20
+  validacion_por_clase: true
   semilla: 42
   probabilidad: true
   # 0 usa todas las imagenes disponibles en cada carpeta/clase.
@@ -114,4 +121,4 @@ entrenamiento:
   # true = omite imagenes donde no detecta ROI facial.
   # false = entrena tambien esas imagenes usando la imagen completa.
   # Solo afecta --modo entrenar.
-  omitir_rostros_sin_roi: false
+  omitir_rostros_sin_roi: true

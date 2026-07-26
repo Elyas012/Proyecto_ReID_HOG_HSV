@@ -13,7 +13,7 @@ import numpy as np
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, f1_score
 
 from .datos import construir_dataset_rostros, listar_imagenes_por_identidad
-from .modelos_svm import ArtefactosSVM, cargar_artefactos, predecir_con_confianza
+from .modelos_svm import ArtefactosSVM, cargar_artefactos, dividir_indices_validacion, predecir_con_confianza
 
 
 def evaluar_predicciones(
@@ -52,6 +52,9 @@ def guardar_reporte_texto(metricas: Dict[str, object], ruta_salida: str | Path) 
     with ruta.open("w", encoding="utf-8") as archivo:
         archivo.write(f"Modelo: {metricas.get('modelo', '')}\n")
         archivo.write(f"Tipo: {metricas.get('tipo', '')}\n")
+        archivo.write(f"Evaluacion: {metricas.get('evaluacion', '')}\n")
+        archivo.write(f"Validacion: {metricas.get('validacion', 0):.2f}\n")
+        archivo.write(f"Validacion por clase: {metricas.get('validacion_por_clase', True)}\n")
         archivo.write(f"Accuracy: {metricas.get('accuracy', 0):.4f}\n")
         archivo.write(f"F1 macro: {metricas.get('f1_macro', 0):.4f}\n")
         archivo.write(f"Conteo original: {metricas.get('conteo_original', {})}\n")
@@ -128,6 +131,9 @@ def diagnosticar_modelo_rostro(configuracion: Dict[str, object]) -> Dict[str, ob
     entrenamiento = configuracion.get("entrenamiento", {})
     max_muestras = int(entrenamiento.get("max_muestras_por_clase", 0))
     semilla = int(entrenamiento.get("semilla", 42))
+    proporcion_validacion = float(entrenamiento.get("validacion", 0.20))
+    validacion_por_clase = bool(entrenamiento.get("validacion_por_clase", True))
+    omitir_sin_roi = bool(entrenamiento.get("omitir_rostros_sin_roi", True))
     ruta_modelo = Path(rutas["modelos"]) / "svm_rostro.pkl"
     if not ruta_modelo.exists():
         raise FileNotFoundError(f"No existe el modelo facial: {ruta_modelo}")
@@ -137,11 +143,28 @@ def diagnosticar_modelo_rostro(configuracion: Dict[str, object]) -> Dict[str, ob
         rutas["rostros"],
         max_muestras_por_clase=max_muestras,
         semilla=semilla,
+        omitir_sin_roi=omitir_sin_roi,
     )
+    muestras_evaluacion = muestras_usadas
+    if proporcion_validacion > 0 and len(etiquetas) > 0:
+        _, indices_validacion = dividir_indices_validacion(
+            etiquetas,
+            proporcion_validacion,
+            semilla=semilla,
+            validacion_por_clase=validacion_por_clase,
+        )
+        if len(indices_validacion) > 0:
+            vectores = vectores[indices_validacion]
+            etiquetas = etiquetas[indices_validacion]
+            muestras_evaluacion = [muestras_usadas[indice] for indice in indices_validacion]
+
     artefactos = cargar_artefactos(ruta_modelo)
     metricas = evaluar_modelo(artefactos, vectores, etiquetas)
     metricas["conteo_original"] = _conteo_muestras(muestras_originales)
-    metricas["conteo_usado"] = _conteo_muestras(muestras_usadas)
+    metricas["conteo_usado"] = _conteo_muestras(muestras_evaluacion)
+    metricas["validacion"] = proporcion_validacion
+    metricas["validacion_por_clase"] = validacion_por_clase
+    metricas["evaluacion"] = "validacion" if muestras_evaluacion is not muestras_usadas else "dataset_completo"
     metricas["modelo"] = str(ruta_modelo)
     metricas["tipo"] = getattr(artefactos, "tipo", "rostro_hog_svm")
 

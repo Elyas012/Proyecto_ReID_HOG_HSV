@@ -165,17 +165,30 @@ class PanelControlInferencia:
             texto_max = "todas" if max_imgs <= 0 else str(max_imgs)
             fecha = str(self.resumen_entrenamiento.get("fecha", "sin fecha"))
             omitir = bool(self.resumen_entrenamiento.get("omitir_rostros_sin_roi", True))
+            validacion = float(self.resumen_entrenamiento.get("validacion", 0.0))
+            por_clase = bool(self.resumen_entrenamiento.get("validacion_por_clase", True))
+            metricas_val = self.resumen_entrenamiento.get("metricas_validacion", {})
+            metricas_rostro = metricas_val.get("rostro", {}) if isinstance(metricas_val, dict) else {}
             y = self._texto(panel_contenido, f"Ultimo entreno: {fecha}", 28, y, color=(220, 220, 220), escala=0.45, avance=22)
             y = self._texto(panel_contenido, f"Max imgs/clase: {texto_max}", 28, y, color=(220, 220, 220), avance=24)
+            y = self._texto(panel_contenido, f"Validacion: {validacion:.0%} {'por clase' if por_clase else 'global'}", 28, y, color=(220, 220, 220), escala=0.48, avance=22)
             y = self._texto(panel_contenido, f"Sin ROI: {'omitidas' if omitir else 'usadas completas'}", 28, y, color=(220, 220, 220), escala=0.48, avance=22)
-            if self.diagnostico:
+            if metricas_rostro:
+                y = self._texto(panel_contenido, f"Accuracy val: {float(metricas_rostro.get('accuracy', 0.0)):.3f}", 28, y, color=(220, 220, 220), avance=24)
+                y = self._texto(panel_contenido, f"F1 val: {float(metricas_rostro.get('f1_macro', 0.0)):.3f}", 28, y, color=(220, 220, 220), avance=24)
+            elif self.diagnostico:
                 y = self._texto(panel_contenido, f"Accuracy diag: {float(self.diagnostico.get('accuracy', 0.0)):.3f}", 28, y, color=(220, 220, 220), avance=24)
                 y = self._texto(panel_contenido, f"F1 diag: {float(self.diagnostico.get('f1_macro', 0.0)):.3f}", 28, y, color=(220, 220, 220), avance=24)
-            conteo = self.resumen_entrenamiento.get("conteo_rostro_usado", {})
+            conteo = self.resumen_entrenamiento.get("conteo_rostro_entrenamiento", self.resumen_entrenamiento.get("conteo_rostro_usado", {}))
             y = self._texto(panel_contenido, "Rostros usados entreno:", 28, y, color=(210, 210, 210), avance=22)
             for nombre, total in list(conteo.items())[:10]:
                 y = self._texto(panel_contenido, f"{nombre}: {total}", 42, y, color=(185, 185, 185), escala=0.45, avance=19)
-            conteo_reid = self.resumen_entrenamiento.get("conteo_reid_usado", {})
+            conteo_val = self.resumen_entrenamiento.get("conteo_rostro_validacion", {})
+            if conteo_val:
+                y = self._texto(panel_contenido, "Rostros validacion:", 28, y, color=(210, 210, 210), avance=22)
+                for nombre, total in list(conteo_val.items())[:6]:
+                    y = self._texto(panel_contenido, f"{nombre}: {total}", 42, y, color=(185, 185, 185), escala=0.45, avance=19)
+            conteo_reid = self.resumen_entrenamiento.get("conteo_reid_entrenamiento", self.resumen_entrenamiento.get("conteo_reid_usado", {}))
             if conteo_reid:
                 y = self._texto(panel_contenido, "Re-ID usado entreno:", 28, y, color=(210, 210, 210), avance=22)
                 for nombre, total in list(conteo_reid.items())[:6]:
