@@ -4,14 +4,50 @@ __pycache__/
 *.pyd
 .env
 .venv/
-modelos/*.pkl
-modelos/*.pt
-salidas/*
-registros/*
-reportes/*
-datos/reidentificacion/*
-datos/rostros/*
 venv/*
-pruebas/videos/*
-pruebas/Imagenes nuevas/*
-info/*
+
+# Datasets privados/pesados: conservar estructura, no contenido.
+datos/rostros/**
+!datos/rostros/
+!datos/rostros/.gitkeep
+!datos/rostros/Ejemplo_Persona/
+!datos/rostros/Ejemplo_Persona/.gitkeep
+
+datos/reidentificacion/**
+!datos/reidentificacion/
+!datos/reidentificacion/.gitkeep
+!datos/reidentificacion/Ejemplo_Persona/
+!datos/reidentificacion/Ejemplo_Persona/.gitkeep
+
+# Modelos y salidas generadas.
+modelos/**
+!modelos/
+!modelos/.gitkeep
+
+salidas/**
+!salidas/
+!salidas/.gitkeep
+
+registros/**
+!registros/
+!registros/.gitkeep
+
+reportes/**
+!reportes/
+!reportes/.gitkeep
+
+# Material de prueba pesado.
+pruebas/videos/**
+!pruebas/videos/
+!pruebas/videos/.gitkeep
+
+pruebas/Videos/**
+!pruebas/Videos/
+!pruebas/Videos/.gitkeep
+
+pruebas/Imagenes nuevas/**
+!pruebas/Imagenes nuevas/
+!pruebas/Imagenes nuevas/.gitkeep
+
+# Renders temporales de documentacion.
+info/render_docx/
