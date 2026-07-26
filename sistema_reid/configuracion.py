@@ -36,6 +36,7 @@ CONFIGURACION_DEFECTO: Dict[str, Any] = {
     },
     "yolo": {"pesos": "modelos/yolov8n.pt", "clase_persona": 0, "confianza": 0.40, "tamano_imagen": 640},
     "umbrales": {"score_rostro": 0.80, "margen_rostro": 0.12, "score_reid": 0.65, "nitidez_minima": 60.0, "tamano_minimo_rostro": 40},
+    "visualizacion": {"modo_cajas": "ambas"},
     "rostro_en_persona": {"usar_zoom_si_no_detecta": True, "factor_zoom": 2.5, "porcentaje_superior": 0.45, "tamano_minimo_zoom": 24},
     "caracteristicas": {"tamano_rostro": [96, 96], "tamano_torso": [128, 256], "bins_hsv": [16, 16, 8]},
     "rutas": {

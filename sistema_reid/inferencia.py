@@ -42,6 +42,8 @@ class ResultadoIdentidad:
     caja: tuple[int, int, int, int]
     ranking: Dict[str, float]
     detalle: str = ""
+    caja_rostro: Optional[tuple[int, int, int, int]] = None
+    detalle_rostro: str = ""
     estado_reid_vivo: Dict[str, int] = field(default_factory=dict)
 
 
@@ -125,6 +127,12 @@ class MotorInferencia:
             return None
         return Deteccion(caja=(x1, y1, x2, y2), score=rostro_zoom.score, clase=0, roi=roi_rostro)
 
+    def _caja_rostro_absoluta(self, deteccion_persona: Deteccion, deteccion_rostro: Deteccion) -> tuple[int, int, int, int]:
+        """Convierte la caja de rostro relativa al ROI de persona a coordenadas del frame."""
+        px1, py1, _, _ = deteccion_persona.caja
+        rx1, ry1, rx2, ry2 = deteccion_rostro.caja
+        return px1 + rx1, py1 + ry1, px1 + rx2, py1 + ry2
+
     def cargar_modelos(self) -> None:
         """Carga SVM facial, SVM Re-ID y el estado del entrenamiento Re-ID en vivo."""
         carpeta_modelos = Path(str(self.configuracion.get("rutas", {}).get("modelos", "modelos")))
@@ -168,7 +176,14 @@ class MotorInferencia:
             self.modelo_reid = self.entrenador_reid.modelo
         return self.entrenador_reid.resumen()
 
-    def _clasificar_reid(self, deteccion_persona: Deteccion, vector_hsv: np.ndarray, motivo: str) -> ResultadoIdentidad:
+    def _clasificar_reid(
+        self,
+        deteccion_persona: Deteccion,
+        vector_hsv: np.ndarray,
+        motivo: str,
+        caja_rostro: Optional[tuple[int, int, int, int]] = None,
+        detalle_rostro: str = "",
+    ) -> ResultadoIdentidad:
         """Ejecuta Re-ID con HSV + SVM cuando el rostro no sirve o no reconoció."""
         score_reid_min = float(self.configuracion.get("umbrales", {}).get("score_reid", 0.65))
 
@@ -181,6 +196,8 @@ class MotorInferencia:
                 deteccion_persona.caja,
                 {},
                 detalle=f"Re-ID activado por {motivo}, pero falta SVM Re-ID entrenado",
+                caja_rostro=caja_rostro,
+                detalle_rostro=detalle_rostro,
             )
 
         identidad, score, ranking = predecir_con_confianza(self.modelo_reid, vector_hsv)
@@ -192,6 +209,8 @@ class MotorInferencia:
                 deteccion_persona.caja,
                 ranking,
                 detalle=f"Re-ID activado por {motivo}",
+                caja_rostro=caja_rostro,
+                detalle_rostro=detalle_rostro,
             )
 
         return ResultadoIdentidad(
@@ -201,56 +220,8 @@ class MotorInferencia:
             deteccion_persona.caja,
             ranking,
             detalle=f"Re-ID activado por {motivo}, score bajo",
-        )
-
-    def decidir_identidad_por_rostro(self, deteccion_rostro: Deteccion) -> ResultadoIdentidad:
-        """Clasifica un ROI que ya corresponde directamente a un rostro."""
-        umbrales = self.configuracion.get("umbrales", {})
-        score_rostro_min = float(umbrales.get("score_rostro", 0.70))
-        margen_rostro_min = float(umbrales.get("margen_rostro", 0.0))
-        tamano_min = int(umbrales.get("tamano_minimo_rostro", 40))
-
-        alto_rostro, ancho_rostro = deteccion_rostro.roi.shape[:2]
-        if min(alto_rostro, ancho_rostro) < tamano_min:
-            return ResultadoIdentidad(
-                "desconocido",
-                "rostro_directo_no_util",
-                0.0,
-                deteccion_rostro.caja,
-                {},
-                detalle="rostro directo demasiado pequeno",
-            )
-
-        if self.modelo_rostro is None:
-            return ResultadoIdentidad(
-                "desconocido",
-                "rostro_directo_sin_modelo",
-                0.0,
-                deteccion_rostro.caja,
-                {},
-                detalle="rostro detectado, pero falta SVM facial",
-            )
-
-        vector_rostro = extraer_hog_rostro(deteccion_rostro.roi)
-        identidad, score, ranking = predecir_con_confianza(self.modelo_rostro, vector_rostro)
-        margen = margen_ranking(ranking)
-        if score >= score_rostro_min and margen >= margen_rostro_min:
-            return ResultadoIdentidad(
-                identidad,
-                "rostro_directo_hog_svm",
-                score,
-                deteccion_rostro.caja,
-                ranking,
-                detalle="ROI directo al rostro",
-            )
-
-        return ResultadoIdentidad(
-            "desconocido",
-            "rostro_directo_score_bajo",
-            score,
-            deteccion_rostro.caja,
-            ranking,
-            detalle=f"rostro detectado directo, score/margen bajo ({margen:.2f})",
+            caja_rostro=caja_rostro,
+            detalle_rostro=detalle_rostro,
         )
 
     def decidir_identidad(self, deteccion_persona: Deteccion) -> ResultadoIdentidad:
@@ -272,11 +243,24 @@ class MotorInferencia:
         if rostro is None:
             return self._clasificar_reid(deteccion_persona, vector_hsv, "rostro_no_visible_tras_zoom")
 
+        caja_rostro = self._caja_rostro_absoluta(deteccion_persona, rostro)
         if not rostro_es_util(rostro.roi, tamano_min, nitidez_min):
-            return self._clasificar_reid(deteccion_persona, vector_hsv, "rostro_borroso_o_pequeno")
+            return self._clasificar_reid(
+                deteccion_persona,
+                vector_hsv,
+                "rostro_borroso_o_pequeno",
+                caja_rostro=caja_rostro,
+                detalle_rostro="ROI rostro no util",
+            )
 
         if self.modelo_rostro is None:
-            return self._clasificar_reid(deteccion_persona, vector_hsv, "sin_svm_facial")
+            return self._clasificar_reid(
+                deteccion_persona,
+                vector_hsv,
+                "sin_svm_facial",
+                caja_rostro=caja_rostro,
+                detalle_rostro="ROI rostro sin SVM facial",
+            )
 
         vector_rostro = extraer_hog_rostro(rostro.roi)
         identidad, score, ranking = predecir_con_confianza(self.modelo_rostro, vector_rostro)
@@ -295,19 +279,22 @@ class MotorInferencia:
                 deteccion_persona.caja,
                 ranking,
                 detalle=detalle,
+                caja_rostro=caja_rostro,
+                detalle_rostro=f"ROI rostro score {score:.2f} margen {margen:.2f}",
                 estado_reid_vivo=estado_reid,
             )
 
         # Comentario clave: rostro visible pero score bajo NO se fuerza; se pasa a Re-ID.
-        return self._clasificar_reid(deteccion_persona, vector_hsv, f"score_o_margen_facial_bajo_{margen:.2f}")
+        return self._clasificar_reid(
+            deteccion_persona,
+            vector_hsv,
+            f"score_o_margen_facial_bajo_{margen:.2f}",
+            caja_rostro=caja_rostro,
+            detalle_rostro=f"ROI rostro score {score:.2f} margen {margen:.2f}",
+        )
 
     def procesar_frame(self, frame: np.ndarray) -> List[ResultadoIdentidad]:
         """Procesa un frame completo y devuelve identidad por cada persona detectada."""
-        tamano_min = int(self.configuracion.get("umbrales", {}).get("tamano_minimo_rostro", 40))
-        rostros_directos = self.detector_rostros.detectar_rostros(frame, tamano_minimo=tamano_min)
-        if rostros_directos:
-            return [self.decidir_identidad_por_rostro(rostro) for rostro in rostros_directos]
-
         detecciones = self.detector_personas.detectar_personas(frame)
         resultados: List[ResultadoIdentidad] = []
         for deteccion in detecciones:
@@ -315,10 +302,21 @@ class MotorInferencia:
         return resultados
 
 
-def dibujar_resultados(frame: np.ndarray, resultados: List[ResultadoIdentidad]) -> np.ndarray:
+def normalizar_modo_cajas(modo: str) -> str:
+    """Normaliza alias de visualizacion de cajas."""
+    modo = str(modo or "ambas").strip().lower()
+    if modo in {"persona", "unificada", "unificado"}:
+        return "persona"
+    if modo in {"rostro", "independiente", "roi_rostro"}:
+        return "rostro"
+    return "ambas"
+
+
+def dibujar_resultados(frame: np.ndarray, resultados: List[ResultadoIdentidad], modo_cajas: str = "ambas") -> np.ndarray:
     """Dibuja cajas, método usado y estado del entrenamiento Re-ID en vivo."""
     salida = frame.copy()
     alto = salida.shape[0]
+    modo_cajas = normalizar_modo_cajas(modo_cajas)
 
     for resultado in resultados:
         x1, y1, x2, y2 = resultado.caja
@@ -326,10 +324,21 @@ def dibujar_resultados(frame: np.ndarray, resultados: List[ResultadoIdentidad]) 
 
         # Comentario clave: verde para identidad aceptada, amarillo/naranja para desconocido o revisión.
         color = (0, 255, 0) if resultado.identidad != "desconocido" else (0, 180, 255)
-        cv2.rectangle(salida, (x1, y1), (x2, y2), color, 2)
-        cv2.putText(salida, texto, (x1, max(20, y1 - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2)
+        dibujar_persona = modo_cajas in {"persona", "ambas"} or resultado.caja_rostro is None
+        dibujar_rostro = modo_cajas in {"rostro", "ambas"} and resultado.caja_rostro is not None
 
-        if resultado.detalle:
+        if dibujar_persona:
+            cv2.rectangle(salida, (x1, y1), (x2, y2), color, 2)
+            cv2.putText(salida, texto, (x1, max(20, y1 - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2)
+
+        if dibujar_rostro and resultado.caja_rostro:
+            rx1, ry1, rx2, ry2 = resultado.caja_rostro
+            color_rostro = (80, 255, 120) if resultado.identidad != "desconocido" else (255, 210, 80)
+            texto_rostro = texto if modo_cajas == "rostro" else (resultado.detalle_rostro or "ROI rostro")
+            cv2.rectangle(salida, (rx1, ry1), (rx2, ry2), color_rostro, 2)
+            cv2.putText(salida, texto_rostro[:70], (rx1, max(20, ry1 - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color_rostro, 1)
+
+        if resultado.detalle and dibujar_persona:
             cv2.putText(salida, resultado.detalle[:80], (x1, min(alto - 10, y2 + 20)), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1)
 
     if resultados:

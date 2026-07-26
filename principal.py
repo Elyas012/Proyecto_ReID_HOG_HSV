@@ -457,7 +457,11 @@ def ejecutar_inferencia_multicamara(configuracion: dict, fuentes: List[Tuple[str
                     vistas.append(crear_placeholder_camara(lector.camara_id, lector.fuente, ancho_celda, alto_celda, lector.error))
                     continue
                 frame_base = redimensionar_para_inferencia(frame, ancho_proceso)
-                salida = dibujar_resultados(frame_base, resultados_por_camara.get(lector.camara_id, []))
+                salida = dibujar_resultados(
+                    frame_base,
+                    resultados_por_camara.get(lector.camara_id, []),
+                    modo_cajas=str(configuracion.get("visualizacion", {}).get("modo_cajas", "ambas")),
+                )
                 salida = dibujar_etiqueta_camara(
                     salida,
                     lector.camara_id,
@@ -499,7 +503,11 @@ def ejecutar_inferencia(configuracion: dict, fuente: str) -> None:
 
     if tipo == "imagen":
         resultados = motor.procesar_frame(entrada)
-        salida = dibujar_resultados(entrada, resultados)
+        salida = dibujar_resultados(
+            entrada,
+            resultados,
+            modo_cajas=str(configuracion.get("visualizacion", {}).get("modo_cajas", "ambas")),
+        )
         ruta_salida = carpeta_salida / "resultado_imagen.jpg"
         cv2.imwrite(str(ruta_salida), salida)
         guardar_log_predicciones(carpeta_registros / "predicciones.csv", 1, resultados, 0.0)
@@ -597,7 +605,11 @@ def ejecutar_inferencia(configuracion: dict, fuente: str) -> None:
         with lock_inferencia:
             resultados = list(resultados_ultimo)
             fps_mostrar = fps_ultimo if fuente_es_video else fps
-        salida = dibujar_resultados(frame_proceso, resultados)
+        salida = dibujar_resultados(
+            frame_proceso,
+            resultados,
+            modo_cajas=str(configuracion.get("visualizacion", {}).get("modo_cajas", "ambas")),
+        )
         if fuente_es_video:
             salida = ajustar_a_celda(salida, ancho_vista_video, alto_vista_video)
         if fuente_es_video and panel is None:

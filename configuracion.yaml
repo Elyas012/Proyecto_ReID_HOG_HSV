@@ -42,6 +42,11 @@ video:
 panel_control:
   activo: true
 
+visualizacion:
+  # persona = caja grande unificada, ambas = persona + ROI rostro,
+  # rostro = ROI rostro independiente si existe; si no, usa persona.
+  modo_cajas: rostro
+
 camaras:
   fuentes:
     - id: camara_01
@@ -65,7 +70,7 @@ yolo:
 
 umbrales:
   score_rostro: 0.80
-  margen_rostro: 0.12
+  margen_rostro: 0.05
   score_reid: 0.65
   nitidez_minima: 60.0
   tamano_minimo_rostro: 40
@@ -73,8 +78,8 @@ umbrales:
 # Segundo intento antes de activar Re-ID: busca rostro con zoom en la parte superior
 # de la persona detectada, util para videos de pasillos/camaras lejanas.
 rostro_en_persona:
-  usar_zoom_si_no_detecta: true
-  factor_zoom: 3.0
+  usar_zoom_si_no_detecta: false
+  factor_zoom: 2.5
   porcentaje_superior: 0.45
   tamano_minimo_zoom: 24
 
