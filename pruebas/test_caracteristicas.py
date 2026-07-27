@@ -23,7 +23,7 @@ def test_extraer_histograma_hsv():
     torso = recortar_torso(imagen)
     vector = extraer_histograma_hsv(torso)
     assert vector.ndim == 1
-    assert vector.size == 16 * 16 * 8
+    assert vector.size == (16 * 16 * 8 + 6) * 4
 
 
 def test_rostro_es_util_devuelve_booleano():

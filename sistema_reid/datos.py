@@ -5,7 +5,7 @@ from __future__ import annotations
 import csv
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import cv2
 import numpy as np
@@ -63,6 +63,25 @@ def limitar_muestras_por_identidad(
         seleccionadas.extend(grupo)
 
     return seleccionadas
+
+
+def filtrar_muestras_minimas_por_identidad(
+    muestras: Sequence[MuestraImagen],
+    minimo_por_identidad: Optional[int],
+) -> List[MuestraImagen]:
+    """Omite identidades que no alcanzan el minimo configurado de muestras."""
+    if minimo_por_identidad is None or minimo_por_identidad <= 0:
+        return list(muestras)
+
+    conteo: Dict[str, int] = {}
+    for muestra in muestras:
+        conteo[muestra.identidad] = conteo.get(muestra.identidad, 0) + 1
+
+    omitidas = {identidad: total for identidad, total in conteo.items() if total < minimo_por_identidad}
+    if omitidas:
+        print(f"[AVISO] Identidades Re-ID omitidas por minimo de muestras: {omitidas}")
+
+    return [muestra for muestra in muestras if conteo.get(muestra.identidad, 0) >= minimo_por_identidad]
 
 
 def cargar_imagen_bgr(ruta: str | Path) -> np.ndarray:
@@ -133,17 +152,21 @@ def construir_dataset_rostros(
 def construir_dataset_reid(
     carpeta_reid: str | Path,
     max_muestras_por_clase: Optional[int] = None,
+    min_muestras_por_clase: Optional[int] = None,
     semilla: int = 42,
+    parametros_hsv: Optional[Dict[str, object]] = None,
 ) -> Tuple[np.ndarray, np.ndarray, List[MuestraImagen]]:
     """Construye vectores HSV y etiquetas desde datos/reidentificacion/<identidad>."""
     muestras = listar_imagenes_por_identidad(carpeta_reid, tipo="reidentificacion")
+    muestras = filtrar_muestras_minimas_por_identidad(muestras, min_muestras_por_clase)
     muestras = limitar_muestras_por_identidad(muestras, max_muestras_por_clase, semilla)
     vectores: List[np.ndarray] = []
     etiquetas: List[str] = []
+    parametros_hsv = parametros_hsv or {}
 
     for muestra in muestras:
         imagen = cargar_imagen_bgr(muestra.ruta)
-        vectores.append(extraer_histograma_hsv(imagen))
+        vectores.append(extraer_histograma_hsv(imagen, **parametros_hsv))
         etiquetas.append(muestra.identidad)
 
     return np.asarray(vectores, dtype="float32"), np.asarray(etiquetas), muestras

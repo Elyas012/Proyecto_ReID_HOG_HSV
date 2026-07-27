@@ -31,7 +31,7 @@ video:
   ancho_proceso: 960
   ancho_vista: 960
   alto_vista: 540
-  procesar_cada_n_frames: 2
+  procesar_cada_n_frames: 1
   inferencia_async: true
   respetar_fps: true
   saltar_frames_atrasados: true
@@ -85,10 +85,18 @@ rostro_en_persona:
 
 caracteristicas:
   descriptor_rostro: hog
-  descriptor_reid: hsv
+  # hsv_espacial = histograma HSV global + bandas horizontales del torso/ropa.
+  # Esto hace que Re-ID no mire solo "colores presentes", sino tambien donde estan.
+  descriptor_reid: hsv_espacial
   tamano_rostro: [96, 96]
   tamano_torso: [128, 256]
   bins_hsv: [16, 16, 8]
+  reid_bandas_horizontales: 3
+  reid_histograma_global: true
+  reid_incluir_momentos: true
+  reid_recorte_lateral: 0.08
+  reid_recorte_superior: 0.0
+  reid_recorte_inferior: 0.0
 
 # Re-ID se aprende durante la inferencia en vivo: cuando el rostro es reconocido
 # por HoG + SVM facial, se guarda HSV del torso con esa identidad y se reentrena SVM Re-ID.
@@ -100,7 +108,7 @@ aprendizaje_reid_en_vivo:
   modelo_salida: svm_reidentificacion_combinado.pkl
   usar_modelo_en_vivo: true
   max_muestras_vivas_por_identidad: 80
-  score_rostro_min_aprendizaje: 0.90
+  score_rostro_min_aprendizaje: 0.82
   margen_rostro_min_aprendizaje: 0.20
 
 rutas:
@@ -114,7 +122,11 @@ rutas:
 
 entrenamiento:
   modelo: svm
+  # kernel queda como respaldo si no defines los especificos.
   kernel: rbf
+  # Rostro HoG y Re-ID HSV pueden necesitar kernels distintos.
+  kernel_rostro: linear
+  kernel_reid: rbf
   # 0.20 = 80% entrenamiento / 20% validacion.
   # El split se hace por identidad para no dejar clases desbalanceadas.
   validacion: 0.20
@@ -123,6 +135,11 @@ entrenamiento:
   probabilidad: true
   # 0 usa todas las imagenes disponibles en cada carpeta/clase.
   max_muestras_por_clase: 0
+  # Rango especifico para rostro. 0 hereda/usa todas.
+  max_muestras_rostro_por_clase: 0
+  # Rango especifico para Re-ID. Min 0 no filtra; max 0 usa todas.
+  min_muestras_reid_por_clase: 0
+  max_muestras_reid_por_clase: 15
   # true = omite imagenes donde no detecta ROI facial.
   # false = entrena tambien esas imagenes usando la imagen completa.
   # Solo afecta --modo entrenar.

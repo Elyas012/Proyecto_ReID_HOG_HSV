@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Iterable, Tuple
+from typing import Dict, Iterable, Tuple
 
 import cv2
 import numpy as np
@@ -64,7 +64,7 @@ def extraer_hog_rostro(
     return vector.astype("float32")
 
 
-def extraer_histograma_hsv(
+def _extraer_histograma_hsv_global(
     roi_torso: np.ndarray,
     tamano: Tuple[int, int] = (128, 256),
     bins: Tuple[int, int, int] = (16, 16, 8),
@@ -77,6 +77,135 @@ def extraer_histograma_hsv(
     histograma = cv2.calcHist([hsv], [0, 1, 2], None, bins, [0, 180, 0, 256, 0, 256])
     histograma = cv2.normalize(histograma, histograma).flatten()
     return histograma.astype("float32")
+
+
+def _limitar_float(valor: object, minimo: float, maximo: float, defecto: float) -> float:
+    """Convierte y limita un valor numerico de configuracion."""
+    try:
+        numero = float(valor)
+    except (TypeError, ValueError):
+        numero = defecto
+    return max(minimo, min(maximo, numero))
+
+
+def _normalizar_tupla_enteros(valor: object, defecto: Tuple[int, ...]) -> Tuple[int, ...]:
+    """Normaliza listas del YAML usadas como tamanos o bins."""
+    if not isinstance(valor, (list, tuple)) or len(valor) != len(defecto):
+        return defecto
+    try:
+        return tuple(max(1, int(v)) for v in valor)
+    except (TypeError, ValueError):
+        return defecto
+
+
+def _limitar_int(valor: object, minimo: int, maximo: int, defecto: int) -> int:
+    """Convierte y limita un entero de configuracion."""
+    try:
+        numero = int(valor)
+    except (TypeError, ValueError):
+        numero = defecto
+    return max(minimo, min(maximo, numero))
+
+
+def parametros_hsv_desde_config(configuracion: Dict[str, object]) -> Dict[str, object]:
+    """Extrae del YAML los parametros del descriptor HSV de Re-ID."""
+    caracteristicas = configuracion.get("caracteristicas", {}) if isinstance(configuracion, dict) else {}
+    if not isinstance(caracteristicas, dict):
+        caracteristicas = {}
+
+    return {
+        "tamano": _normalizar_tupla_enteros(caracteristicas.get("tamano_torso"), (128, 256)),
+        "bins": _normalizar_tupla_enteros(caracteristicas.get("bins_hsv"), (16, 16, 8)),
+        "bandas_horizontales": _limitar_int(caracteristicas.get("reid_bandas_horizontales", 3), 1, 8, 3),
+        "usar_global": bool(caracteristicas.get("reid_histograma_global", True)),
+        "incluir_momentos": bool(caracteristicas.get("reid_incluir_momentos", True)),
+        "recorte_lateral": _limitar_float(caracteristicas.get("reid_recorte_lateral", 0.08), 0.0, 0.35, 0.08),
+        "recorte_superior": _limitar_float(caracteristicas.get("reid_recorte_superior", 0.0), 0.0, 0.35, 0.0),
+        "recorte_inferior": _limitar_float(caracteristicas.get("reid_recorte_inferior", 0.0), 0.0, 0.35, 0.0),
+    }
+
+
+def dimension_histograma_hsv(parametros: Dict[str, object]) -> int:
+    """Calcula la dimension esperada del descriptor HSV espacial."""
+    bins = _normalizar_tupla_enteros(parametros.get("bins"), (16, 16, 8))
+    bandas = _limitar_int(parametros.get("bandas_horizontales", 3), 1, 8, 3)
+    usar_global = bool(parametros.get("usar_global", True))
+    incluir_momentos = bool(parametros.get("incluir_momentos", True))
+    regiones = (1 if usar_global or bandas == 1 else 0) + (bandas if bandas > 1 else 0)
+    dimension_region = int(np.prod(bins)) + (6 if incluir_momentos else 0)
+    return regiones * dimension_region
+
+
+def recortar_margenes_reid(
+    imagen: np.ndarray,
+    recorte_lateral: float = 0.08,
+    recorte_superior: float = 0.0,
+    recorte_inferior: float = 0.0,
+) -> np.ndarray:
+    """Reduce borde/fondo dentro del ROI para que Re-ID mire mas la ropa."""
+    alto, ancho = imagen.shape[:2]
+    x1 = int(ancho * recorte_lateral)
+    x2 = int(ancho * (1.0 - recorte_lateral))
+    y1 = int(alto * recorte_superior)
+    y2 = int(alto * (1.0 - recorte_inferior))
+    if x2 <= x1 or y2 <= y1:
+        return imagen
+    return imagen[y1:y2, x1:x2]
+
+
+def _histograma_hsv_region(region_bgr: np.ndarray, bins: Tuple[int, int, int]) -> np.ndarray:
+    """Calcula un histograma HSV normalizado para una region."""
+    hsv = cv2.cvtColor(region_bgr, cv2.COLOR_BGR2HSV)
+    histograma = cv2.calcHist([hsv], [0, 1, 2], None, bins, [0, 180, 0, 256, 0, 256])
+    histograma = cv2.normalize(histograma, histograma, alpha=1.0, norm_type=cv2.NORM_L1).flatten()
+    return histograma.astype("float32")
+
+
+def _momentos_hsv_region(region_bgr: np.ndarray) -> np.ndarray:
+    """Resume promedio y variacion HSV para reforzar el histograma."""
+    hsv = cv2.cvtColor(region_bgr, cv2.COLOR_BGR2HSV)
+    medias, desvios = cv2.meanStdDev(hsv)
+    escala = np.asarray([180.0, 256.0, 256.0], dtype="float32")
+    vector = np.concatenate([(medias.flatten() / escala), (desvios.flatten() / escala)])
+    return vector.astype("float32")
+
+
+def extraer_histograma_hsv(
+    roi_torso: np.ndarray,
+    tamano: Tuple[int, int] = (128, 256),
+    bins: Tuple[int, int, int] = (16, 16, 8),
+    bandas_horizontales: int = 3,
+    usar_global: bool = True,
+    incluir_momentos: bool = True,
+    recorte_lateral: float = 0.08,
+    recorte_superior: float = 0.0,
+    recorte_inferior: float = 0.0,
+) -> np.ndarray:
+    """Extrae HSV espacial del torso/ropa para re-identificacion sin rostro."""
+    torso = redimensionar_roi(asegurar_bgr(roi_torso), tamano)
+    torso = recortar_margenes_reid(torso, recorte_lateral, recorte_superior, recorte_inferior)
+    bandas_horizontales = max(1, min(8, int(bandas_horizontales)))
+
+    regiones = []
+    if usar_global or bandas_horizontales == 1:
+        regiones.append(torso)
+
+    if bandas_horizontales > 1:
+        alto = torso.shape[0]
+        for indice in range(bandas_horizontales):
+            y1 = int(indice * alto / bandas_horizontales)
+            y2 = int((indice + 1) * alto / bandas_horizontales)
+            if y2 > y1:
+                regiones.append(torso[y1:y2, :])
+
+    # Comentario clave: las bandas hacen que dos personas con colores parecidos no queden tan iguales.
+    partes = []
+    for region in regiones:
+        partes.append(_histograma_hsv_region(region, bins))
+        if incluir_momentos:
+            partes.append(_momentos_hsv_region(region))
+
+    return np.concatenate(partes).astype("float32")
 
 
 def recortar_caja(imagen: np.ndarray, caja: Caja) -> np.ndarray:

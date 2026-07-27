@@ -19,7 +19,7 @@ from typing import Dict, Iterable, List, Tuple
 import cv2
 import numpy as np
 
-from .caracteristicas import extraer_histograma_hsv, extraer_hog_rostro, recortar_torso, rostro_es_util
+from .caracteristicas import extraer_histograma_hsv, extraer_hog_rostro, parametros_hsv_desde_config, recortar_torso, rostro_es_util
 from .datos import construir_dataset_reid, construir_dataset_rostros, guardar_imagen_bgr, guardar_metadata_csv
 from .deteccion import Deteccion, DetectorPersonasYOLO, DetectorRostros
 from .evaluacion import evaluar_modelo
@@ -124,14 +124,26 @@ def guardar_resumen_entrenamiento(
     """Guarda un resumen ligero del ultimo entrenamiento para el panel."""
     rutas = configuracion["rutas"]
     entrenamiento = configuracion.get("entrenamiento", {})
+    caracteristicas = configuracion.get("caracteristicas", {})
     ruta_resumen = Path(rutas["reportes"]) / "resumen_entrenamiento.json"
     ruta_resumen.parent.mkdir(parents=True, exist_ok=True)
     resumen = {
         "fecha": time.strftime("%Y-%m-%d %H:%M:%S"),
         "max_muestras_por_clase": int(entrenamiento.get("max_muestras_por_clase", 0)),
+        "max_muestras_rostro_por_clase": int(
+            entrenamiento.get("max_muestras_rostro_por_clase", entrenamiento.get("max_muestras_por_clase", 0))
+        ),
+        "min_muestras_reid_por_clase": int(entrenamiento.get("min_muestras_reid_por_clase", 0)),
+        "max_muestras_reid_por_clase": int(
+            entrenamiento.get("max_muestras_reid_por_clase", entrenamiento.get("max_muestras_por_clase", 0))
+        ),
+        "kernel_rostro": str(entrenamiento.get("kernel_rostro", entrenamiento.get("kernel", "rbf"))),
+        "kernel_reid": str(entrenamiento.get("kernel_reid", entrenamiento.get("kernel", "rbf"))),
         "validacion": float(entrenamiento.get("validacion", 0.20)),
         "validacion_por_clase": bool(entrenamiento.get("validacion_por_clase", True)),
         "omitir_rostros_sin_roi": bool(entrenamiento.get("omitir_rostros_sin_roi", True)),
+        "descriptor_reid": str(caracteristicas.get("descriptor_reid", "hsv_espacial")),
+        "parametros_hsv_reid": parametros_hsv_desde_config(configuracion),
         "conteo_rostro_entrenamiento": contar_muestras(muestras_rostro),
         "conteo_rostro_validacion": contar_muestras(muestras_rostro_validacion or []),
         "conteo_reid_entrenamiento": contar_muestras(muestras_reid),
@@ -267,21 +279,27 @@ def entrenar_desde_capturas(configuracion: Dict[str, object]) -> Dict[str, objec
     entrenamiento = configuracion.get("entrenamiento", {})
 
     max_muestras = int(entrenamiento.get("max_muestras_por_clase", 0))
+    max_muestras_rostro = int(entrenamiento.get("max_muestras_rostro_por_clase", max_muestras))
+    max_muestras_reid = int(entrenamiento.get("max_muestras_reid_por_clase", max_muestras))
+    min_muestras_reid = int(entrenamiento.get("min_muestras_reid_por_clase", 0))
     semilla = int(entrenamiento.get("semilla", 42))
     omitir_sin_roi = bool(entrenamiento.get("omitir_rostros_sin_roi", True))
     proporcion_validacion = float(entrenamiento.get("validacion", 0.20))
     validacion_por_clase = bool(entrenamiento.get("validacion_por_clase", True))
+    parametros_hsv = parametros_hsv_desde_config(configuracion)
 
     vectores_rostro, etiquetas_rostro, muestras_rostro = construir_dataset_rostros(
         rutas["rostros"],
-        max_muestras_por_clase=max_muestras,
+        max_muestras_por_clase=max_muestras_rostro,
         semilla=semilla,
         omitir_sin_roi=omitir_sin_roi,
     )
     vectores_reid, etiquetas_reid, muestras_reid = construir_dataset_reid(
         rutas["reidentificacion"],
-        max_muestras_por_clase=max_muestras,
+        max_muestras_por_clase=max_muestras_reid,
+        min_muestras_por_clase=min_muestras_reid,
         semilla=semilla,
+        parametros_hsv=parametros_hsv,
     )
 
     # Comentario clave: se guarda metadata del entrenamiento para evidenciar qué muestras se usaron.
@@ -329,8 +347,12 @@ def entrenar_desde_capturas(configuracion: Dict[str, object]) -> Dict[str, objec
         etiquetas_reid_train,
         rutas["modelos"],
         kernel=str(entrenamiento.get("kernel", "rbf")),
+        kernel_rostro=str(entrenamiento.get("kernel_rostro", entrenamiento.get("kernel", "rbf"))),
+        kernel_reid=str(entrenamiento.get("kernel_reid", entrenamiento.get("kernel", "rbf"))),
         probabilidad=bool(entrenamiento.get("probabilidad", True)),
         max_muestras_por_clase=max_muestras,
+        max_muestras_rostro_por_clase=max_muestras_rostro,
+        max_muestras_reid_por_clase=max_muestras_reid,
         semilla=semilla,
     )
     metricas_validacion: Dict[str, object] = {}

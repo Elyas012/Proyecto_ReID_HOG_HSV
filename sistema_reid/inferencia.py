@@ -18,7 +18,14 @@ from typing import Dict, List, Optional
 import cv2
 import numpy as np
 
-from .caracteristicas import extraer_histograma_hsv, extraer_hog_rostro, recortar_torso, rostro_es_util
+from .caracteristicas import (
+    dimension_histograma_hsv,
+    extraer_histograma_hsv,
+    extraer_hog_rostro,
+    parametros_hsv_desde_config,
+    recortar_torso,
+    rostro_es_util,
+)
 from .deteccion import Deteccion, DetectorPersonasYOLO, DetectorRostros
 from .modelos_svm import ArtefactosSVM, cargar_artefactos, predecir_con_confianza
 from .reid_en_vivo import EntrenadorReIDEnVivo
@@ -58,6 +65,8 @@ class MotorInferencia:
         self.modelo_rostro: Optional[ArtefactosSVM] = None
         self.modelo_reid: Optional[ArtefactosSVM] = None
         self.detector_rostros = DetectorRostros()
+        self.parametros_hsv = parametros_hsv_desde_config(configuracion)
+        self.estado_reid_vivo_actual: Dict[str, int] = {}
         self.detector_personas = DetectorPersonasYOLO(
             pesos=str(configuracion.get("yolo", {}).get("pesos", modelos / "yolov8n.pt")),
             confianza=float(configuracion.get("yolo", {}).get("confianza", 0.40)),
@@ -76,12 +85,25 @@ class MotorInferencia:
                 carpeta_modelos=modelos,
                 minimo_por_identidad=int(aprendizaje.get("minimo_por_identidad", 4)),
                 reentrenar_cada=int(aprendizaje.get("reentrenar_cada", 8)),
-                kernel=str(configuracion.get("entrenamiento", {}).get("kernel", "rbf")),
+                kernel=str(
+                    configuracion.get("entrenamiento", {}).get(
+                        "kernel_reid",
+                        configuracion.get("entrenamiento", {}).get("kernel", "rbf"),
+                    )
+                ),
                 probabilidad=bool(configuracion.get("entrenamiento", {}).get("probabilidad", True)),
                 nombre_modelo=str(aprendizaje.get("modelo_salida", "svm_reidentificacion_en_vivo.pkl")),
                 combinar_con_base=bool(aprendizaje.get("combinar_con_reid_fijo", True)),
                 max_muestras_vivas_por_identidad=int(aprendizaje.get("max_muestras_vivas_por_identidad", 80)),
+                parametros_hsv=self.parametros_hsv,
+                dimension_descriptor=dimension_histograma_hsv(self.parametros_hsv),
             )
+
+    def estado_reid_vivo(self) -> Dict[str, int]:
+        """Devuelve el conteo persistente de muestras Re-ID base + vivo."""
+        if self.entrenador_reid:
+            self.estado_reid_vivo_actual = self.entrenador_reid.resumen()
+        return dict(self.estado_reid_vivo_actual)
 
     def _detectar_rostro_con_zoom(self, deteccion_persona: Deteccion) -> Optional[Deteccion]:
         """Segundo intento: recorta cabeza/torso superior, amplia y busca rostro."""
@@ -144,10 +166,13 @@ class MotorInferencia:
         else:
             print("[AVISO] No existe modelos/svm_rostro.pkl. Primero entrena con dataset de rostros.")
 
+        dimension_reid = dimension_histograma_hsv(self.parametros_hsv)
         if ruta_reid.exists():
             modelo_reid_fijo = cargar_artefactos(ruta_reid)
             if getattr(modelo_reid_fijo, "tipo", "") in {"reid_hsv_svm_en_vivo", "reid_hsv_svm_combinado"}:
                 print("[AVISO] modelos/svm_reidentificacion.pkl parece venir del entrenamiento en vivo anterior; no se carga como Re-ID fijo.")
+            elif getattr(modelo_reid_fijo.escalador, "n_features_in_", dimension_reid) != dimension_reid:
+                print("[AVISO] modelos/svm_reidentificacion.pkl usa un descriptor Re-ID anterior. Reentrena para usar hsv_espacial.")
             else:
                 self.modelo_reid = modelo_reid_fijo
 
@@ -155,7 +180,8 @@ class MotorInferencia:
             entrenamiento = self.configuracion.get("entrenamiento", {})
             self.entrenador_reid.cargar_base_reid(
                 self.configuracion.get("rutas", {}).get("reidentificacion", "datos/reidentificacion"),
-                max_muestras_por_clase=int(entrenamiento.get("max_muestras_por_clase", 0)),
+                max_muestras_por_clase=int(entrenamiento.get("max_muestras_reid_por_clase", entrenamiento.get("max_muestras_por_clase", 0))),
+                min_muestras_por_clase=int(entrenamiento.get("min_muestras_reid_por_clase", 0)),
                 semilla=int(entrenamiento.get("semilla", 42)),
             )
             self.entrenador_reid.cargar_estado()
@@ -163,18 +189,21 @@ class MotorInferencia:
                 self.entrenador_reid.entrenar_si_es_posible()
             if self.usar_reid_en_vivo and self.entrenador_reid.modelo is not None:
                 self.modelo_reid = self.entrenador_reid.modelo
+            self.estado_reid_vivo_actual = self.entrenador_reid.resumen()
 
     def _actualizar_reid_en_vivo(self, identidad: str, vector_hsv: np.ndarray, score_rostro: float, margen_rostro: float) -> Dict[str, int]:
         """Alimenta el SVM Re-ID con HSV cuando el rostro ya fue reconocido correctamente."""
         if not self.entrenador_reid:
             return {}
         if score_rostro < self.score_rostro_min_aprendizaje or margen_rostro < self.margen_rostro_min_aprendizaje:
-            return self.entrenador_reid.resumen()
+            self.estado_reid_vivo_actual = self.entrenador_reid.resumen()
+            return dict(self.estado_reid_vivo_actual)
 
         actualizado = self.entrenador_reid.agregar_muestra(identidad, vector_hsv)
         if actualizado and self.entrenador_reid.modelo is not None:
             self.modelo_reid = self.entrenador_reid.modelo
-        return self.entrenador_reid.resumen()
+        self.estado_reid_vivo_actual = self.entrenador_reid.resumen()
+        return dict(self.estado_reid_vivo_actual)
 
     def _clasificar_reid(
         self,
@@ -186,6 +215,7 @@ class MotorInferencia:
     ) -> ResultadoIdentidad:
         """Ejecuta Re-ID con HSV + SVM cuando el rostro no sirve o no reconoció."""
         score_reid_min = float(self.configuracion.get("umbrales", {}).get("score_reid", 0.65))
+        estado_reid = self.estado_reid_vivo()
 
         if self.modelo_reid is None:
             # Comentario clave: sin SVM Re-ID entrenado no se inventa identidad; se marca desconocido.
@@ -198,9 +228,23 @@ class MotorInferencia:
                 detalle=f"Re-ID activado por {motivo}, pero falta SVM Re-ID entrenado",
                 caja_rostro=caja_rostro,
                 detalle_rostro=detalle_rostro,
+                estado_reid_vivo=estado_reid,
             )
 
-        identidad, score, ranking = predecir_con_confianza(self.modelo_reid, vector_hsv)
+        try:
+            identidad, score, ranking = predecir_con_confianza(self.modelo_reid, vector_hsv)
+        except ValueError as exc:
+            return ResultadoIdentidad(
+                "desconocido",
+                "reid_hsv_svm_reentrenar",
+                0.0,
+                deteccion_persona.caja,
+                {},
+                detalle=f"Re-ID requiere reentrenar: {exc}",
+                caja_rostro=caja_rostro,
+                detalle_rostro=detalle_rostro,
+                estado_reid_vivo=estado_reid,
+            )
         if score >= score_reid_min:
             return ResultadoIdentidad(
                 identidad,
@@ -211,6 +255,7 @@ class MotorInferencia:
                 detalle=f"Re-ID activado por {motivo}",
                 caja_rostro=caja_rostro,
                 detalle_rostro=detalle_rostro,
+                estado_reid_vivo=estado_reid,
             )
 
         return ResultadoIdentidad(
@@ -222,6 +267,7 @@ class MotorInferencia:
             detalle=f"Re-ID activado por {motivo}, score bajo",
             caja_rostro=caja_rostro,
             detalle_rostro=detalle_rostro,
+            estado_reid_vivo=estado_reid,
         )
 
     def decidir_identidad(self, deteccion_persona: Deteccion) -> ResultadoIdentidad:
@@ -233,7 +279,7 @@ class MotorInferencia:
         nitidez_min = float(umbrales.get("nitidez_minima", 60.0))
 
         torso = recortar_torso(deteccion_persona.roi)
-        vector_hsv = extraer_histograma_hsv(torso)
+        vector_hsv = extraer_histograma_hsv(torso, **self.parametros_hsv)
 
         rostro = self.detector_rostros.detectar_rostro_principal(deteccion_persona.roi)
         rostro_por_zoom = False

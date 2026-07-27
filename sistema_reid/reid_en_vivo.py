@@ -29,6 +29,8 @@ class EntrenadorReIDEnVivo:
     nombre_modelo: str = "svm_reidentificacion_en_vivo.pkl"
     combinar_con_base: bool = True
     max_muestras_vivas_por_identidad: int = 80
+    parametros_hsv: Dict[str, object] = field(default_factory=dict)
+    dimension_descriptor: Optional[int] = None
     vectores_base: List[np.ndarray] = field(default_factory=list)
     etiquetas_base: List[str] = field(default_factory=list)
     vectores: List[np.ndarray] = field(default_factory=list)
@@ -50,6 +52,7 @@ class EntrenadorReIDEnVivo:
         self,
         carpeta_reid: str | Path,
         max_muestras_por_clase: int = 0,
+        min_muestras_por_clase: int = 0,
         semilla: int = 42,
     ) -> None:
         """Carga descriptores HSV del dataset fijo para combinarlos con el buffer vivo."""
@@ -64,7 +67,9 @@ class EntrenadorReIDEnVivo:
             vectores, etiquetas, _ = construir_dataset_reid(
                 carpeta_reid,
                 max_muestras_por_clase=max_muestras_por_clase,
+                min_muestras_por_clase=min_muestras_por_clase,
                 semilla=semilla,
+                parametros_hsv=self.parametros_hsv,
             )
         except Exception as exc:
             print(f"[AVISO] No se pudo cargar Re-ID fijo para combinar: {exc}")
@@ -78,15 +83,31 @@ class EntrenadorReIDEnVivo:
     def cargar_estado(self) -> None:
         """Carga buffer HSV y SVM Re-ID previamente guardados, si existen."""
         self.carpeta_modelos.mkdir(parents=True, exist_ok=True)
+        dimension_base = len(self.vectores_base[0]) if self.vectores_base else self.dimension_descriptor
 
         if self.ruta_buffer.exists():
             datos = np.load(self.ruta_buffer, allow_pickle=True)
             self.vectores = [v.astype("float32") for v in datos["vectores"]]
             self.etiquetas = [str(e) for e in datos["etiquetas"]]
+            if dimension_base is not None:
+                pares = [
+                    (vector, etiqueta)
+                    for vector, etiqueta in zip(self.vectores, self.etiquetas)
+                    if vector.size == dimension_base
+                ]
+                omitidas = len(self.vectores) - len(pares)
+                self.vectores = [vector for vector, _ in pares]
+                self.etiquetas = [etiqueta for _, etiqueta in pares]
+                if omitidas:
+                    print(f"[AVISO] Buffer Re-ID vivo omitio {omitidas} vectores con descriptor anterior. Reentrena para regenerarlos.")
 
         if self.ruta_modelo.exists():
             objeto = cargar_artefactos(self.ruta_modelo)
             if isinstance(objeto, ArtefactosSVM):
+                esperadas = getattr(objeto.escalador, "n_features_in_", None)
+                if dimension_base is not None and esperadas is not None and int(esperadas) != dimension_base:
+                    print("[AVISO] Modelo Re-ID vivo anterior incompatible con el descriptor actual. Se ignorara hasta reentrenar.")
+                    return
                 self.modelo = objeto
 
     def guardar_buffer(self) -> None:

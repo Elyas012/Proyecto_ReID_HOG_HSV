@@ -6,6 +6,8 @@ __pycache__/
 .venv/
 venv/*
 
+info/*
+
 # Datasets privados/pesados: conservar estructura, no contenido.
 datos/rostros/**
 !datos/rostros/
@@ -50,6 +52,3 @@ pruebas/Imagenes nuevas/**
 !pruebas/Imagenes nuevas/.gitkeep
 
 # Renders temporales de documentacion.
-info/render_docx/
-
-info/*

@@ -175,6 +175,12 @@ def entrenar_svm(
 def predecir_con_confianza(artefactos: ArtefactosSVM, vector: np.ndarray) -> Tuple[str, float, Dict[str, float]]:
     """Predice identidad, score y ranking usando el SVM entrenado."""
     vector_2d = np.asarray(vector, dtype="float32").reshape(1, -1)
+    esperadas = getattr(artefactos.escalador, "n_features_in_", None)
+    if esperadas is not None and vector_2d.shape[1] != int(esperadas):
+        raise ValueError(
+            f"El modelo {artefactos.tipo} espera {int(esperadas)} caracteristicas, "
+            f"pero recibio {vector_2d.shape[1]}. Reentrena el modelo."
+        )
     vector_escalado = artefactos.escalador.transform(vector_2d)
     identidad = str(artefactos.modelo.predict(vector_escalado)[0])
 
@@ -214,29 +220,41 @@ def entrenar_modelos_principales(
     etiquetas_reid: Optional[np.ndarray],
     carpeta_modelos: str | Path,
     kernel: str = "rbf",
+    kernel_rostro: Optional[str] = None,
+    kernel_reid: Optional[str] = None,
     probabilidad: bool = True,
     max_muestras_por_clase: Optional[int] = None,
+    max_muestras_rostro_por_clase: Optional[int] = None,
+    max_muestras_reid_por_clase: Optional[int] = None,
     semilla: int = 42,
 ) -> Dict[str, object]:
     """Entrena SVM facial y SVM Re-ID cuando existan datos suficientes."""
     carpeta = Path(carpeta_modelos)
     carpeta.mkdir(parents=True, exist_ok=True)
     entrenados: Dict[str, object] = {}
+    kernel_rostro = kernel_rostro or kernel
+    kernel_reid = kernel_reid or kernel
+    max_muestras_rostro_por_clase = (
+        max_muestras_rostro_por_clase if max_muestras_rostro_por_clase is not None else max_muestras_por_clase
+    )
+    max_muestras_reid_por_clase = (
+        max_muestras_reid_por_clase if max_muestras_reid_por_clase is not None else max_muestras_por_clase
+    )
 
     if vectores_rostro is not None and etiquetas_rostro is not None and len(vectores_rostro) > 0:
         print(f"[INFO] Rostro muestras por identidad: {contar_muestras_por_clase(etiquetas_rostro)}")
         vectores_rostro, etiquetas_rostro = limitar_muestras_por_clase(
             vectores_rostro,
             etiquetas_rostro,
-            max_muestras_por_clase,
+            max_muestras_rostro_por_clase,
             semilla,
         )
-        if max_muestras_por_clase:
+        if max_muestras_rostro_por_clase:
             print(f"[INFO] Rostro usado para entrenar: {contar_muestras_por_clase(etiquetas_rostro)}")
         valido, razon = hay_datos_para_svm(etiquetas_rostro)
         if valido:
             # Comentario clave: este modelo se usará primero cuando el rostro sea visible y confiable.
-            modelo_rostro = entrenar_svm(vectores_rostro, etiquetas_rostro, "rostro_hog_svm", kernel, probabilidad)
+            modelo_rostro = entrenar_svm(vectores_rostro, etiquetas_rostro, "rostro_hog_svm", kernel_rostro, probabilidad)
             guardar_artefactos(modelo_rostro, carpeta / "svm_rostro.pkl")
             entrenados["svm_rostro"] = modelo_rostro
         else:
@@ -247,15 +265,15 @@ def entrenar_modelos_principales(
         vectores_reid, etiquetas_reid = limitar_muestras_por_clase(
             vectores_reid,
             etiquetas_reid,
-            max_muestras_por_clase,
+            max_muestras_reid_por_clase,
             semilla,
         )
-        if max_muestras_por_clase:
+        if max_muestras_reid_por_clase:
             print(f"[INFO] Re-ID usado para entrenar: {contar_muestras_por_clase(etiquetas_reid)}")
         valido, razon = hay_datos_para_svm(etiquetas_reid)
         if valido:
             # Comentario clave: este modelo se usa solo cuando el rostro no sirve o no fue reconocido.
-            modelo_reid = entrenar_svm(vectores_reid, etiquetas_reid, "reid_hsv_svm", kernel, probabilidad)
+            modelo_reid = entrenar_svm(vectores_reid, etiquetas_reid, "reid_hsv_svm", kernel_reid, probabilidad)
             guardar_artefactos(modelo_reid, carpeta / "svm_reidentificacion.pkl")
             entrenados["svm_reidentificacion"] = modelo_reid
         else:

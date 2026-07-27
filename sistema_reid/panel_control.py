@@ -121,6 +121,15 @@ class PanelControlInferencia:
         return {
             "fecha": f"metadata: {ruta.name}",
             "max_muestras_por_clase": int(entrenamiento.get("max_muestras_por_clase", 0)),
+            "max_muestras_rostro_por_clase": int(
+                entrenamiento.get("max_muestras_rostro_por_clase", entrenamiento.get("max_muestras_por_clase", 0))
+            ),
+            "min_muestras_reid_por_clase": int(entrenamiento.get("min_muestras_reid_por_clase", 0)),
+            "max_muestras_reid_por_clase": int(
+                entrenamiento.get("max_muestras_reid_por_clase", entrenamiento.get("max_muestras_por_clase", 0))
+            ),
+            "kernel_rostro": str(entrenamiento.get("kernel_rostro", entrenamiento.get("kernel", "rbf"))),
+            "kernel_reid": str(entrenamiento.get("kernel_reid", entrenamiento.get("kernel", "rbf"))),
             "omitir_rostros_sin_roi": bool(entrenamiento.get("omitir_rostros_sin_roi", True)),
             "conteo_rostro_usado": dict(sorted(conteo_rostro.items())),
             "conteo_reid_usado": dict(sorted(conteo_reid.items())),
@@ -137,6 +146,12 @@ class PanelControlInferencia:
         y = 34
         y = self._texto(panel_contenido, "Panel de control", 22, y, escala=0.72, color=(255, 255, 255), grosor=2, avance=32)
         y = self._texto(panel_contenido, f"Frame {frame_numero} | FPS {fps:.1f}", 22, y, color=(210, 210, 210), avance=30)
+        estado_reid_vivo = next((resultado.estado_reid_vivo for resultado in resultados if resultado.estado_reid_vivo), {})
+        if estado_reid_vivo:
+            total_reid_vivo = sum(int(total) for total in estado_reid_vivo.values())
+            resumen_reid = ", ".join(f"{nombre}:{total}" for nombre, total in list(estado_reid_vivo.items())[:4])
+            y = self._texto(panel_contenido, f"Re-ID vivo total: {total_reid_vivo}", 22, y, color=(185, 230, 255), escala=0.48, avance=22)
+            y = self._texto(panel_contenido, resumen_reid[:48], 22, y, color=(185, 230, 255), escala=0.42, avance=22)
         y = self._separador(panel_contenido, y)
 
         y = self._texto(panel_contenido, "Umbrales editables", 22, y, color=(255, 255, 255), grosor=2, avance=28)
@@ -171,6 +186,19 @@ class PanelControlInferencia:
             metricas_rostro = metricas_val.get("rostro", {}) if isinstance(metricas_val, dict) else {}
             y = self._texto(panel_contenido, f"Ultimo entreno: {fecha}", 28, y, color=(220, 220, 220), escala=0.45, avance=22)
             y = self._texto(panel_contenido, f"Max imgs/clase: {texto_max}", 28, y, color=(220, 220, 220), avance=24)
+            y = self._texto(
+                panel_contenido,
+                f"Kernel rostro/reid: {self.resumen_entrenamiento.get('kernel_rostro', 'rbf')} / {self.resumen_entrenamiento.get('kernel_reid', 'rbf')}",
+                28,
+                y,
+                color=(220, 220, 220),
+                escala=0.44,
+                avance=22,
+            )
+            max_reid = int(self.resumen_entrenamiento.get("max_muestras_reid_por_clase", 0))
+            min_reid = int(self.resumen_entrenamiento.get("min_muestras_reid_por_clase", 0))
+            texto_max_reid = "todas" if max_reid <= 0 else str(max_reid)
+            y = self._texto(panel_contenido, f"Rango Re-ID: min {min_reid} / max {texto_max_reid}", 28, y, color=(220, 220, 220), escala=0.44, avance=22)
             y = self._texto(panel_contenido, f"Validacion: {validacion:.0%} {'por clase' if por_clase else 'global'}", 28, y, color=(220, 220, 220), escala=0.48, avance=22)
             y = self._texto(panel_contenido, f"Sin ROI: {'omitidas' if omitir else 'usadas completas'}", 28, y, color=(220, 220, 220), escala=0.48, avance=22)
             if metricas_rostro:
