@@ -16,7 +16,7 @@ import csv
 import os
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
@@ -341,11 +341,67 @@ def ajustar_a_celda(frame: np.ndarray, ancho: int, alto: int) -> np.ndarray:
     escala = min(ancho / max(1, w), alto / max(1, h))
     nuevo_w = max(1, int(w * escala))
     nuevo_h = max(1, int(h * escala))
-    redimensionado = cv2.resize(frame, (nuevo_w, nuevo_h), interpolation=cv2.INTER_AREA)
+    interpolacion = cv2.INTER_AREA if escala < 1.0 else cv2.INTER_LINEAR
+    redimensionado = cv2.resize(frame, (nuevo_w, nuevo_h), interpolation=interpolacion)
     x = (ancho - nuevo_w) // 2
     y = (alto - nuevo_h) // 2
     lienzo[y : y + nuevo_h, x : x + nuevo_w] = redimensionado
     return lienzo
+
+
+def obtener_tamano_pantalla(defecto: tuple[int, int] = (1280, 720)) -> tuple[int, int]:
+    """Obtiene el tamano de pantalla para modo video completo."""
+    try:
+        import tkinter as tk
+
+        root = tk.Tk()
+        root.withdraw()
+        ancho = int(root.winfo_screenwidth())
+        alto = int(root.winfo_screenheight())
+        root.destroy()
+        if ancho > 0 and alto > 0:
+            return ancho, alto
+    except Exception:
+        pass
+    return defecto
+
+
+def escalar_caja(caja: tuple[int, int, int, int], escala_x: float, escala_y: float) -> tuple[int, int, int, int]:
+    """Escala una caja desde el frame de inferencia al frame visual."""
+    x1, y1, x2, y2 = caja
+    return (
+        int(round(x1 * escala_x)),
+        int(round(y1 * escala_y)),
+        int(round(x2 * escala_x)),
+        int(round(y2 * escala_y)),
+    )
+
+
+def escalar_resultados(
+    resultados: Iterable[ResultadoIdentidad],
+    origen_shape: tuple[int, int, int],
+    destino_shape: tuple[int, int, int],
+) -> List[ResultadoIdentidad]:
+    """Convierte cajas de resultados entre dimensiones sin recalcular inferencia."""
+    origen_h, origen_w = origen_shape[:2]
+    destino_h, destino_w = destino_shape[:2]
+    escala_x = destino_w / max(1, origen_w)
+    escala_y = destino_h / max(1, origen_h)
+    escalados: List[ResultadoIdentidad] = []
+    for resultado in resultados:
+        caja_rostro = (
+            escalar_caja(resultado.caja_rostro, escala_x, escala_y)
+            if resultado.caja_rostro is not None
+            else None
+        )
+        escalados.append(
+            replace(
+                resultado,
+                caja=escalar_caja(resultado.caja, escala_x, escala_y),
+                caja_rostro=caja_rostro,
+            )
+        )
+    return escalados
 
 
 def dibujar_etiqueta_camara(frame: np.ndarray, camara_id: str, fuente: str, fps: float, frame_numero: int) -> np.ndarray:
@@ -521,9 +577,15 @@ def ejecutar_inferencia(configuracion: dict, fuente: str) -> None:
 
     fuente_es_video = es_archivo_video(fuente)
     video_config = configuracion.get("video", {})
+    respetar_resolucion_original = bool(video_config.get("respetar_resolucion_original", True))
+    vista_original_estricta = bool(video_config.get("vista_original_estricta", False))
+    pantalla_completa_video = bool(video_config.get("pantalla_completa", True))
+    panel_separado_video = bool(video_config.get("panel_separado", True))
+    alto_panel_video = int(video_config.get("alto_panel", 720))
     ancho_video = int(video_config.get("ancho_proceso", 960))
     ancho_vista_video = int(video_config.get("ancho_vista", 960))
     alto_vista_video = int(video_config.get("alto_vista", 540))
+    ancho_pantalla, alto_pantalla = obtener_tamano_pantalla((ancho_vista_video, alto_vista_video))
     procesar_cada = max(1, int(video_config.get("procesar_cada_n_frames", 2)))
     inferencia_async_video = bool(video_config.get("inferencia_async", True))
     respetar_fps_video = bool(video_config.get("respetar_fps", True))
@@ -538,9 +600,21 @@ def ejecutar_inferencia(configuracion: dict, fuente: str) -> None:
     ultimo_tiempo = time.time()
     inicio_reproduccion = time.time()
     fps_video_origen = float(captura.get(cv2.CAP_PROP_FPS) or 0.0)
+    ancho_origen = int(captura.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+    alto_origen = int(captura.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
     if fps_video_origen <= 1.0 or fps_video_origen > 120.0:
         fps_video_origen = float(video_config.get("fps_por_defecto", 30))
     duracion_frame_video = 1.0 / max(1.0, fps_video_origen)
+    if fuente_es_video:
+        if respetar_resolucion_original and vista_original_estricta:
+            modo_vista = "original/autosize"
+        elif pantalla_completa_video:
+            modo_vista = f"pantalla completa sin deformar {ancho_pantalla}x{alto_pantalla}"
+        elif respetar_resolucion_original:
+            modo_vista = f"original -> ajustado sin deformar {ancho_vista_video}x{alto_vista_video}"
+        else:
+            modo_vista = f"{ancho_vista_video}x{alto_vista_video}"
+        print(f"[INFO] Video origen: {ancho_origen}x{alto_origen} @ {fps_video_origen:.2f} FPS | vista: {modo_vista}")
     resultados_ultimo: List[ResultadoIdentidad] = []
     fps_ultimo = 0.0
     lock_inferencia = threading.Lock()
@@ -549,9 +623,27 @@ def ejecutar_inferencia(configuracion: dict, fuente: str) -> None:
     mostrar = bool(configuracion.get("ejecucion", {}).get("mostrar_ventana", True))
     usar_panel = bool(configuracion.get("panel_control", {}).get("activo", True))
     nombre_ventana = "Re-ID Video" if fuente_es_video else "Re-ID PC Python"
-    panel = PanelControlInferencia(nombre_ventana, configuracion) if mostrar and usar_panel else None
-    if mostrar and panel is None:
-        cv2.namedWindow(nombre_ventana, cv2.WINDOW_NORMAL)
+    ventana_original = bool(fuente_es_video and respetar_resolucion_original and vista_original_estricta)
+    usar_panel_separado = bool(fuente_es_video and usar_panel and panel_separado_video)
+    nombre_panel = "Panel Re-ID Video" if usar_panel_separado else nombre_ventana
+    panel = (
+        PanelControlInferencia(nombre_panel, configuracion, ventana_autosize=False if usar_panel_separado else ventana_original)
+        if mostrar and usar_panel
+        else None
+    )
+    if mostrar:
+        if usar_panel_separado or panel is None:
+            cv2.namedWindow(nombre_ventana, cv2.WINDOW_NORMAL)
+        if usar_panel_separado and hasattr(cv2, "WND_PROP_TOPMOST"):
+            try:
+                cv2.setWindowProperty(nombre_panel, cv2.WND_PROP_TOPMOST, 1)
+            except cv2.error:
+                pass
+        if fuente_es_video and pantalla_completa_video:
+            try:
+                cv2.setWindowProperty(nombre_ventana, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+            except cv2.error:
+                pass
 
     def lanzar_inferencia_video(frame_modelo: np.ndarray, numero_frame: int) -> None:
         """Procesa inferencia de video sin bloquear la reproduccion."""
@@ -605,20 +697,34 @@ def ejecutar_inferencia(configuracion: dict, fuente: str) -> None:
         with lock_inferencia:
             resultados = list(resultados_ultimo)
             fps_mostrar = fps_ultimo if fuente_es_video else fps
+        frame_dibujo = frame
+        resultados_dibujo = resultados
+        if fuente_es_video:
+            resultados_dibujo = escalar_resultados(resultados, frame_proceso.shape, frame.shape)
+        else:
+            frame_dibujo = frame_proceso
         salida = dibujar_resultados(
-            frame_proceso,
-            resultados,
+            frame_dibujo,
+            resultados_dibujo,
             modo_cajas=str(configuracion.get("visualizacion", {}).get("modo_cajas", "ambas")),
         )
-        if fuente_es_video:
+        if fuente_es_video and pantalla_completa_video:
+            salida = ajustar_a_celda(salida, ancho_pantalla, alto_pantalla)
+        elif fuente_es_video and (not respetar_resolucion_original or not vista_original_estricta):
             salida = ajustar_a_celda(salida, ancho_vista_video, alto_vista_video)
         if fuente_es_video and panel is None:
             salida = dibujar_barra_video(salida, fps_mostrar, frame_numero)
 
         # Comentario clave: la ventana permite validar visualmente el prototipo durante la exposición.
         if mostrar:
-            vista = panel.construir_vista(salida, resultados, fps_mostrar, frame_numero) if panel else salida
-            cv2.imshow(nombre_ventana, vista)
+            if panel and usar_panel_separado:
+                vista = salida
+                cv2.imshow(nombre_ventana, vista)
+                vista_panel = panel.construir_panel(resultados_dibujo, fps_mostrar, frame_numero, alto_visible=alto_panel_video)
+                cv2.imshow(nombre_panel, vista_panel)
+            else:
+                vista = panel.construir_vista(salida, resultados_dibujo, fps_mostrar, frame_numero) if panel else salida
+                cv2.imshow(nombre_ventana, vista)
             espera_ms = 1
             if fuente_es_video and respetar_fps_video:
                 objetivo = inicio_reproduccion + frame_numero * duracion_frame_video

@@ -1,4 +1,4 @@
-"""Motor de inferencia en vivo según la documentación oficial.
+"""Motor de inferencia en vivo
 
 Flujo correcto:
 1. YOLOv8n detecta la persona y genera ROI.
@@ -123,31 +123,40 @@ class MotorInferencia:
         if zona_superior.size == 0:
             return None
 
-        factor_zoom = float(config_zoom.get("factor_zoom", 2.5))
-        factor_zoom = max(1.0, min(5.0, factor_zoom))
-        ancho_zoom = max(1, int(zona_superior.shape[1] * factor_zoom))
-        alto_zoom = max(1, int(zona_superior.shape[0] * factor_zoom))
-        zona_zoom = cv2.resize(zona_superior, (ancho_zoom, alto_zoom), interpolation=cv2.INTER_CUBIC)
+        factores_config = config_zoom.get("factores_zoom", config_zoom.get("factor_zoom", 2.5))
+        if isinstance(factores_config, (list, tuple)):
+            factores_zoom = [float(factor) for factor in factores_config]
+        else:
+            factores_zoom = [float(factores_config)]
 
-        tamano_minimo_zoom = int(config_zoom.get("tamano_minimo_zoom", 24))
-        rostros = self.detector_rostros.detectar_rostros(zona_zoom, tamano_minimo=tamano_minimo_zoom)
-        if not rostros:
-            return None
+        tamano_minimo_zoom = int(config_zoom.get("tamano_minimo_zoom", 18))
+        usar_roi_zoom = bool(config_zoom.get("usar_roi_zoom_para_clasificar", True))
+        for factor_zoom in factores_zoom:
+            factor_zoom = max(1.0, min(6.0, factor_zoom))
+            ancho_zoom = max(1, int(zona_superior.shape[1] * factor_zoom))
+            alto_zoom = max(1, int(zona_superior.shape[0] * factor_zoom))
+            zona_zoom = cv2.resize(zona_superior, (ancho_zoom, alto_zoom), interpolation=cv2.INTER_CUBIC)
 
-        rostro_zoom = rostros[0]
-        zx1, zy1, zx2, zy2 = rostro_zoom.caja
-        x1 = int(zx1 / factor_zoom)
-        y1 = int(zy1 / factor_zoom)
-        x2 = int(zx2 / factor_zoom)
-        y2 = int(zy2 / factor_zoom)
-        x1 = max(0, min(x1, ancho - 1))
-        y1 = max(0, min(y1, alto - 1))
-        x2 = max(x1 + 1, min(x2, ancho))
-        y2 = max(y1 + 1, min(y2, alto))
-        roi_rostro = roi_persona[y1:y2, x1:x2]
-        if roi_rostro.size == 0:
-            return None
-        return Deteccion(caja=(x1, y1, x2, y2), score=rostro_zoom.score, clase=0, roi=roi_rostro)
+            rostros = self.detector_rostros.detectar_rostros(zona_zoom, tamano_minimo=tamano_minimo_zoom)
+            if not rostros:
+                continue
+
+            rostro_zoom = rostros[0]
+            zx1, zy1, zx2, zy2 = rostro_zoom.caja
+            x1 = int(zx1 / factor_zoom)
+            y1 = int(zy1 / factor_zoom)
+            x2 = int(zx2 / factor_zoom)
+            y2 = int(zy2 / factor_zoom)
+            x1 = max(0, min(x1, ancho - 1))
+            y1 = max(0, min(y1, alto - 1))
+            x2 = max(x1 + 1, min(x2, ancho))
+            y2 = max(y1 + 1, min(y2, alto))
+            roi_rostro = rostro_zoom.roi if usar_roi_zoom else roi_persona[y1:y2, x1:x2]
+            if roi_rostro.size == 0:
+                continue
+            return Deteccion(caja=(x1, y1, x2, y2), score=rostro_zoom.score, clase=0, roi=roi_rostro)
+
+        return None
 
     def _caja_rostro_absoluta(self, deteccion_persona: Deteccion, deteccion_rostro: Deteccion) -> tuple[int, int, int, int]:
         """Convierte la caja de rostro relativa al ROI de persona a coordenadas del frame."""

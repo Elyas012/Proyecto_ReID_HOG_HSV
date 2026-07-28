@@ -28,13 +28,21 @@ multicamara:
 
 # Ajustes para cargar videos desde archivo. Evita ventanas gigantes y mejora fluidez.
 video:
+  # true = usa el frame original para dibujar y conservar detalle antes de la vista.
+  # vista_original_estricta true = muestra pixeles originales, pero puede salirse de pantalla.
+  # vista_original_estricta false = encaja sin deformar en ancho_vista x alto_vista.
+  respetar_resolucion_original: true
+  vista_original_estricta: false
+  pantalla_completa: true
+  panel_separado: true
+  alto_panel: 720
   ancho_proceso: 960
-  ancho_vista: 960
-  alto_vista: 540
+  ancho_vista: 1280
+  alto_vista: 720
   procesar_cada_n_frames: 1
   inferencia_async: true
   respetar_fps: true
-  saltar_frames_atrasados: true
+  saltar_frames_atrasados: false
   max_salto_frames: 30
   fps_por_defecto: 15
   tamano_yolo: 416
@@ -78,10 +86,12 @@ umbrales:
 # Segundo intento antes de activar Re-ID: busca rostro con zoom en la parte superior
 # de la persona detectada, util para videos de pasillos/camaras lejanas.
 rostro_en_persona:
-  usar_zoom_si_no_detecta: false
-  factor_zoom: 2.5
+  usar_zoom_si_no_detecta: true
+  factor_zoom: 3.0
+  factores_zoom: [2.0, 3.0, 4.0]
   porcentaje_superior: 0.45
-  tamano_minimo_zoom: 24
+  tamano_minimo_zoom: 18
+  usar_roi_zoom_para_clasificar: true
 
 caracteristicas:
   descriptor_rostro: hog
@@ -103,12 +113,12 @@ caracteristicas:
 aprendizaje_reid_en_vivo:
   activo: true
   combinar_con_reid_fijo: true
-  minimo_por_identidad: 4
-  reentrenar_cada: 5
+  minimo_por_identidad: 3
+  reentrenar_cada: 4
   modelo_salida: svm_reidentificacion_combinado.pkl
   usar_modelo_en_vivo: true
   max_muestras_vivas_por_identidad: 80
-  score_rostro_min_aprendizaje: 0.82
+  score_rostro_min_aprendizaje: 0.55
   margen_rostro_min_aprendizaje: 0.20
 
 rutas:
@@ -139,7 +149,7 @@ entrenamiento:
   max_muestras_rostro_por_clase: 0
   # Rango especifico para Re-ID. Min 0 no filtra; max 0 usa todas.
   min_muestras_reid_por_clase: 0
-  max_muestras_reid_por_clase: 15
+  max_muestras_reid_por_clase: 20
   # true = omite imagenes donde no detecta ROI facial.
   # false = entrena tambien esas imagenes usando la imagen completa.
   # Solo afecta --modo entrenar.

@@ -16,10 +16,17 @@ from .inferencia import ResultadoIdentidad
 class PanelControlInferencia:
     """Dibuja un panel lateral y actualiza umbrales con trackbars de OpenCV."""
 
-    def __init__(self, nombre_ventana: str, configuracion: Dict[str, object], ancho: int = 500) -> None:
+    def __init__(
+        self,
+        nombre_ventana: str,
+        configuracion: Dict[str, object],
+        ancho: int = 500,
+        ventana_autosize: bool = False,
+    ) -> None:
         self.nombre_ventana = nombre_ventana
         self.configuracion = configuracion
         self.ancho = ancho
+        self.ventana_autosize = ventana_autosize
         self.diagnostico = self._cargar_diagnostico()
         self.resumen_entrenamiento = self._cargar_resumen_entrenamiento()
         self.sliders_activos = False
@@ -29,7 +36,8 @@ class PanelControlInferencia:
 
     def _preparar_ventana(self) -> None:
         try:
-            cv2.namedWindow(self.nombre_ventana, cv2.WINDOW_NORMAL)
+            modo_ventana = cv2.WINDOW_AUTOSIZE if self.ventana_autosize else cv2.WINDOW_NORMAL
+            cv2.namedWindow(self.nombre_ventana, modo_ventana)
             self._crear_sliders()
             cv2.setMouseCallback(self.nombre_ventana, self._manejar_mouse)
             self.sliders_activos = True
@@ -139,7 +147,7 @@ class PanelControlInferencia:
     def construir_vista(self, frame: np.ndarray, resultados: Iterable[ResultadoIdentidad], fps: float, frame_numero: int) -> np.ndarray:
         self.actualizar_configuracion()
         resultados = list(resultados)
-        alto = max(520, frame.shape[0])
+        alto = frame.shape[0]
         alto_contenido = max(1150, alto + 1)
         panel_contenido = np.full((alto_contenido, self.ancho, 3), (32, 34, 38), dtype=np.uint8)
 
@@ -241,6 +249,13 @@ class PanelControlInferencia:
         panel = self._recortar_panel(panel_contenido[: min(panel_contenido.shape[0], y + 28)], alto)
         return self._combinar(frame, panel)
 
+    def construir_panel(self, resultados: Iterable[ResultadoIdentidad], fps: float, frame_numero: int, alto_visible: int = 720) -> np.ndarray:
+        """Construye solo el panel para usarlo en una ventana separada."""
+        alto_visible = max(240, int(alto_visible))
+        frame_dummy = np.zeros((alto_visible, 1, 3), dtype=np.uint8)
+        vista = self.construir_vista(frame_dummy, resultados, fps, frame_numero)
+        return vista[:, 1:]
+
     def _recortar_panel(self, panel_contenido: np.ndarray, alto_visible: int) -> np.ndarray:
         """Recorta el panel completo a la altura visible y dibuja indicador de scroll."""
         alto_contenido = panel_contenido.shape[0]
@@ -276,9 +291,13 @@ class PanelControlInferencia:
 
     def _combinar(self, frame: np.ndarray, panel: np.ndarray) -> np.ndarray:
         alto = panel.shape[0]
-        escala = alto / frame.shape[0]
-        ancho_frame = max(1, int(frame.shape[1] * escala))
-        frame_redimensionado = cv2.resize(frame, (ancho_frame, alto), interpolation=cv2.INTER_AREA)
+        if alto == frame.shape[0]:
+            frame_redimensionado = frame
+        else:
+            escala = alto / frame.shape[0]
+            ancho_frame = max(1, int(frame.shape[1] * escala))
+            interpolacion = cv2.INTER_AREA if escala < 1.0 else cv2.INTER_LINEAR
+            frame_redimensionado = cv2.resize(frame, (ancho_frame, alto), interpolation=interpolacion)
         return np.hstack([frame_redimensionado, panel])
 
     def _texto(

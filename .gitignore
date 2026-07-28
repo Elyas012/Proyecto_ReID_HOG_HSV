@@ -52,3 +52,6 @@ pruebas/Imagenes nuevas/**
 !pruebas/Imagenes nuevas/.gitkeep
 
 # Renders temporales de documentacion.
+
+pruebas/Videos definitivos/**
+pruebas/Videos random/**
