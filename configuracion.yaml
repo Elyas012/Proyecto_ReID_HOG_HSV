@@ -20,31 +20,32 @@ rendimiento:
 multicamara:
   activo_sin_fuente_en_inferir: true
   max_camaras: 4
-  ancho_proceso: 640
+  ancho_proceso: 800
   ancho_celda: 640
   alto_celda: 360
   intervalo_inferencia_ms: 120
   tamano_yolo: 416
 
-# Ajustes para cargar videos desde archivo. Evita ventanas gigantes y mejora fluidez.
+# Ajustes para cargar videos desde archivo.
 video:
-  # true = usa el frame original para dibujar y conservar detalle antes de la vista.
-  # vista_original_estricta true = muestra pixeles originales, pero puede salirse de pantalla.
-  # vista_original_estricta false = encaja sin deformar en ancho_vista x alto_vista.
   respetar_resolucion_original: true
   vista_original_estricta: false
   pantalla_completa: true
   panel_separado: true
   alto_panel: 720
-  ancho_proceso: 960
+  ancho_proceso: 640
   ancho_vista: 1280
   alto_vista: 720
-  procesar_cada_n_frames: 1
-  inferencia_async: true
+  # Cada cuantos frames se intenta analizar con IA. 1 = mas preciso, 3-5 = mas fluido.
+  procesar_cada_n_frames: 2
+  # true = el video no espera a la IA; usa el ultimo resultado disponible sin congelar.
+  modo_fluido: true
+  # 0 = no oculta cajas por desfase; recomendado para que los ROIs sigan visibles en video.
+  max_desfase_roi_frames: 0
   respetar_fps: true
-  saltar_frames_atrasados: false
-  max_salto_frames: 30
-  fps_por_defecto: 15
+  # true = si el procesamiento se atrasa, salta frames del video para recuperar fluidez.
+  saltar_frames_atrasados: true
+  fps_por_defecto: 30
   tamano_yolo: 416
 
 panel_control:
@@ -77,11 +78,11 @@ yolo:
   dispositivo: cpu
 
 umbrales:
-  score_rostro: 0.80
+  score_rostro: 0.70
   margen_rostro: 0.05
-  score_reid: 0.65
-  nitidez_minima: 60.0
-  tamano_minimo_rostro: 40
+  score_reid: 0.60
+  nitidez_minima: 30.0
+  tamano_minimo_rostro: 30
 
 # Segundo intento antes de activar Re-ID: busca rostro con zoom en la parte superior
 # de la persona detectada, util para videos de pasillos/camaras lejanas.
@@ -95,10 +96,14 @@ rostro_en_persona:
 
 caracteristicas:
   descriptor_rostro: hog
-  # hsv_espacial = histograma HSV global + bandas horizontales del torso/ropa.
-  # Esto hace que Re-ID no mire solo "colores presentes", sino tambien donde estan.
+  # hsv_espacial = histograma HSV global + bandas horizontales del cuerpo completo/ropa.
+  # Esto hace que Re-ID no mire solo "colores presentes", sino tambien donde estan en la persona.
   descriptor_reid: hsv_espacial
-  tamano_rostro: [96, 96]
+  tamano_rostro: [128, 128]
+  hog_orientaciones: 9
+  hog_pixeles_por_celda: [8, 8]
+  hog_celdas_por_bloque: [2, 2]
+  # Nombre historico: ahora representa el tamano normalizado del ROI Re-ID de persona completa.
   tamano_torso: [128, 256]
   bins_hsv: [16, 16, 8]
   reid_bandas_horizontales: 3
@@ -109,22 +114,41 @@ caracteristicas:
   reid_recorte_inferior: 0.0
 
 # Re-ID se aprende durante la inferencia en vivo: cuando el rostro es reconocido
-# por HoG + SVM facial, se guarda HSV del torso con esa identidad y se reentrena SVM Re-ID.
+# por HoG + SVM facial, se guarda HSV del cuerpo completo con esa identidad y se reentrena SVM Re-ID.
 aprendizaje_reid_en_vivo:
   activo: true
   combinar_con_reid_fijo: true
+  guardar_capturas: true
+  carpeta_capturas: datos/reidentificacionF
   minimo_por_identidad: 3
   reentrenar_cada: 4
+  reentrenar_combinado_al_iniciar: true
   modelo_salida: svm_reidentificacion_combinado.pkl
   usar_modelo_en_vivo: true
-  max_muestras_vivas_por_identidad: 80
-  score_rostro_min_aprendizaje: 0.55
+  max_muestras_vivas_por_identidad: 50
+  max_imagenes_carpeta_por_identidad: 60
+  score_rostro_min_aprendizaje: 0.75
   margen_rostro_min_aprendizaje: 0.20
+
+augmentation_reidF:
+  # Solo se aplica al entrenar modelos, usando las imagenes automaticas de datos/reidentificacionF.
+  activo: true
+  cantidad_por_imagen: 1
+  guardar_imagenes: true
+  # Se generan en la misma carpeta datos/reidentificacionF/<identidad>/ como *_aug_XX.jpg.
+  max_imagenes_por_identidad: 50
+  brillo: 18.0
+  contraste: 0.12
+  ruido_std: 3.0
+  rotacion_grados: 3.0
+  recorte_escala_min: 0.92
+  espejo_horizontal: true
 
 rutas:
   datos: datos
   rostros: datos/rostros
-  reidentificacion: datos/reidentificacion
+  rostros_v2: datos/rostros_v2
+  reidentificacionF: datos/reidentificacionF
   modelos: modelos
   salidas: salidas
   reportes: reportes
@@ -149,8 +173,10 @@ entrenamiento:
   max_muestras_rostro_por_clase: 0
   # Rango especifico para Re-ID. Min 0 no filtra; max 0 usa todas.
   min_muestras_reid_por_clase: 0
-  max_muestras_reid_por_clase: 20
+  max_muestras_reid_por_clase: 0
   # true = omite imagenes donde no detecta ROI facial.
   # false = entrena tambien esas imagenes usando la imagen completa.
   # Solo afecta --modo entrenar.
-  omitir_rostros_sin_roi: true
+  omitir_rostros_sin_roi: false
+  # true = si detecta ROI facial pero es muy pequeno/borroso, no lo usa para entrenar rostro.
+  filtrar_rostros_baja_calidad: false

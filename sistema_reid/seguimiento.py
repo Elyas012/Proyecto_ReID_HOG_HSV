@@ -55,6 +55,8 @@ class RastreadorSimple:
             mejor_distancia = float("inf")
 
             for id_pista, pista in self.pistas.items():
+                if id_pista in asignadas:
+                    continue
                 distancia = distancia_centros(caja, pista.caja)
                 if distancia < mejor_distancia and distancia <= self.distancia_maxima:
                     mejor_id = id_pista

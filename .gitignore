@@ -15,11 +15,10 @@ datos/rostros/**
 !datos/rostros/Ejemplo_Persona/
 !datos/rostros/Ejemplo_Persona/.gitkeep
 
-datos/reidentificacion/**
-!datos/reidentificacion/
-!datos/reidentificacion/.gitkeep
-!datos/reidentificacion/Ejemplo_Persona/
-!datos/reidentificacion/Ejemplo_Persona/.gitkeep
+datos/reidentificacionF/**
+!datos/reidentificacionF/
+!datos/reidentificacionF/.gitkeep
+!datos/reidentificacionF/README.md
 
 # Modelos y salidas generadas.
 modelos/**

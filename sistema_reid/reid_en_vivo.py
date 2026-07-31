@@ -1,20 +1,24 @@
 """Entrenamiento Re-ID en vivo con HSV + SVM.
 
 Durante la ejecución, cuando el rostro sí se reconoce correctamente con HoG + SVM,
-el sistema aprovecha ese momento para guardar el descriptor HSV del torso/ropa con
+el sistema aprovecha ese momento para guardar el descriptor HSV del cuerpo completo/ropa con
 la identidad confirmada. Con esas muestras se reentrena un SVM Re-ID en vivo.
 Luego, si el rostro deja de verse o no supera el umbral, se usa ese SVM Re-ID.
 """
 
 from __future__ import annotations
 
+import re
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Sequence, Tuple
 
+import cv2
 import numpy as np
 
 from .modelos_svm import ArtefactosSVM, cargar_artefactos, entrenar_svm, guardar_artefactos, hay_datos_para_svm
+from .datos import limitar_imagenes_recientes_por_identidad
 
 
 @dataclass
@@ -31,6 +35,9 @@ class EntrenadorReIDEnVivo:
     max_muestras_vivas_por_identidad: int = 80
     parametros_hsv: Dict[str, object] = field(default_factory=dict)
     dimension_descriptor: Optional[int] = None
+    carpeta_capturas: Optional[Path] = None
+    guardar_capturas: bool = True
+    max_imagenes_carpeta_por_identidad: int = 50
     vectores_base: List[np.ndarray] = field(default_factory=list)
     etiquetas_base: List[str] = field(default_factory=list)
     vectores: List[np.ndarray] = field(default_factory=list)
@@ -55,7 +62,22 @@ class EntrenadorReIDEnVivo:
         min_muestras_por_clase: int = 0,
         semilla: int = 42,
     ) -> None:
-        """Carga descriptores HSV del dataset fijo para combinarlos con el buffer vivo."""
+        """Carga una carpeta Re-ID base para combinarla con el buffer vivo."""
+        self.cargar_bases_reid(
+            [("reid_base", carpeta_reid)],
+            max_muestras_por_clase=max_muestras_por_clase,
+            min_muestras_por_clase=min_muestras_por_clase,
+            semilla=semilla,
+        )
+
+    def cargar_bases_reid(
+        self,
+        carpetas_reid: Sequence[Tuple[str, str | Path]],
+        max_muestras_por_clase: int = 0,
+        min_muestras_por_clase: int = 0,
+        semilla: int = 42,
+    ) -> None:
+        """Carga varias carpetas Re-ID base para combinarlas con el buffer vivo."""
         self.vectores_base = []
         self.etiquetas_base = []
         if not self.combinar_con_base:
@@ -63,22 +85,53 @@ class EntrenadorReIDEnVivo:
 
         try:
             from .datos import construir_dataset_reid
-
-            vectores, etiquetas, _ = construir_dataset_reid(
-                carpeta_reid,
-                max_muestras_por_clase=max_muestras_por_clase,
-                min_muestras_por_clase=min_muestras_por_clase,
-                semilla=semilla,
-                parametros_hsv=self.parametros_hsv,
-            )
         except Exception as exc:
-            print(f"[AVISO] No se pudo cargar Re-ID fijo para combinar: {exc}")
+            print(f"[AVISO] No se pudo importar cargador Re-ID para combinar: {exc}")
             return
 
-        self.vectores_base = [np.asarray(vector, dtype="float32").ravel() for vector in vectores]
-        self.etiquetas_base = [str(etiqueta) for etiqueta in etiquetas]
+        for nombre_fuente, carpeta_reid in carpetas_reid:
+            try:
+                vectores, etiquetas, _ = construir_dataset_reid(
+                    carpeta_reid,
+                    max_muestras_por_clase=max_muestras_por_clase,
+                    min_muestras_por_clase=0,
+                    semilla=semilla,
+                    parametros_hsv=self.parametros_hsv,
+                    tipo=str(nombre_fuente),
+                )
+            except Exception as exc:
+                print(f"[AVISO] No se pudo cargar Re-ID {nombre_fuente} para combinar: {exc}")
+                continue
+
+            if len(vectores) == 0:
+                continue
+            self.vectores_base.extend(np.asarray(vector, dtype="float32").ravel() for vector in vectores)
+            self.etiquetas_base.extend(str(etiqueta) for etiqueta in etiquetas)
+            print(f"[INFO] Re-ID {nombre_fuente} cargado para combinar: {self._contar_etiquetas(etiquetas)}")
+
+        if min_muestras_por_clase > 0 and self.etiquetas_base:
+            conteo = self._contar_etiquetas(self.etiquetas_base)
+            pares = [
+                (vector, etiqueta)
+                for vector, etiqueta in zip(self.vectores_base, self.etiquetas_base)
+                if conteo.get(etiqueta, 0) >= min_muestras_por_clase
+            ]
+            omitidas = {etiqueta: total for etiqueta, total in conteo.items() if total < min_muestras_por_clase}
+            if omitidas:
+                print(f"[AVISO] Re-ID combinado omitio identidades base por minimo de muestras: {omitidas}")
+            self.vectores_base = [vector for vector, _ in pares]
+            self.etiquetas_base = [etiqueta for _, etiqueta in pares]
+
         if self.etiquetas_base:
-            print(f"[INFO] Re-ID base cargado para combinar: {self.resumen_base()}")
+            print(f"[INFO] Re-ID base total cargado para combinar: {self.resumen_base()}")
+
+    def _contar_etiquetas(self, etiquetas: Sequence[str]) -> Dict[str, int]:
+        """Cuenta etiquetas con orden estable para diagnostico."""
+        conteo: Dict[str, int] = {}
+        for etiqueta in etiquetas:
+            etiqueta = str(etiqueta)
+            conteo[etiqueta] = conteo.get(etiqueta, 0) + 1
+        return {etiqueta: conteo[etiqueta] for etiqueta in sorted(conteo)}
 
     def cargar_estado(self) -> None:
         """Carga buffer HSV y SVM Re-ID previamente guardados, si existen."""
@@ -151,11 +204,38 @@ class EntrenadorReIDEnVivo:
             etiquetas = list(self.etiquetas)
         return np.asarray(vectores, dtype="float32"), np.asarray(etiquetas)
 
-    def agregar_muestra(self, identidad: str, vector_hsv: np.ndarray) -> bool:
-        """Agrega una muestra HSV de torso/ropa asociada a una identidad ya reconocida por rostro."""
+    def _nombre_seguro(self, texto: str) -> str:
+        """Limpia nombres para carpetas/archivos en Windows."""
+        limpio = re.sub(r'[<>:"/\\|?*]+', "_", str(texto)).strip()
+        limpio = re.sub(r"\s+", " ", limpio)
+        return limpio or "desconocido"
+
+    def guardar_captura_reid(self, identidad: str, imagen_bgr: Optional[np.ndarray]) -> Optional[Path]:
+        """Guarda la imagen de cuerpo completo capturada para reentrenamiento posterior."""
+        if not self.guardar_capturas or imagen_bgr is None or imagen_bgr.size == 0 or self.carpeta_capturas is None:
+            return None
+
+        identidad_segura = self._nombre_seguro(identidad)
+        carpeta_identidad = self.carpeta_capturas / identidad_segura
+        carpeta_identidad.mkdir(parents=True, exist_ok=True)
+        marca_tiempo = time.strftime("%Y%m%d_%H%M%S")
+        milisegundos = int((time.time() % 1) * 1000)
+        nombre_archivo = f"{identidad_segura}_reid_vivo_{marca_tiempo}_{milisegundos:03d}_{len(self.vectores):05d}.jpg"
+        ruta = carpeta_identidad / nombre_archivo
+
+        ok, codificada = cv2.imencode(".jpg", imagen_bgr)
+        if not ok:
+            return None
+        codificada.tofile(str(ruta))
+        limitar_imagenes_recientes_por_identidad(carpeta_identidad, int(self.max_imagenes_carpeta_por_identidad))
+        return ruta
+
+    def agregar_muestra(self, identidad: str, vector_hsv: np.ndarray, imagen_bgr: Optional[np.ndarray] = None) -> bool:
+        """Agrega una muestra HSV de cuerpo completo asociada a una identidad ya reconocida por rostro."""
         vector = np.asarray(vector_hsv, dtype="float32").ravel()
         self.vectores.append(vector)
         self.etiquetas.append(str(identidad))
+        self.guardar_captura_reid(identidad, imagen_bgr)
         self._limitar_buffer_vivo()
         self.muestras_nuevas += 1
         self.guardar_buffer()

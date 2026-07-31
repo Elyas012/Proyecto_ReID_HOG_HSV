@@ -5,8 +5,8 @@ Proyecto ajustado a la documentación oficial. La PC ejecuta toda la IA y los ce
 ## Regla principal respetada
 
 1. **Primero identificación facial:** si el rostro se ve bien, se extrae **HoG** del rostro y se clasifica con **SVM facial** ya entrenado con `datos/rostros/<identidad>/`.
-2. **Después Re-ID:** si el rostro no se ve, está borroso, está de espaldas o el score facial no supera el umbral, se activa **HSV del torso/ropa + SVM Re-ID**.
-3. **Re-ID en vivo:** durante la ejecución, cuando una persona sí fue reconocida por rostro, el sistema guarda el HSV de su torso con esa identidad y va reentrenando el **SVM Re-ID** en vivo. Así después puede reconocerla cuando deje de verse el rostro.
+2. **Después Re-ID:** si el rostro no se ve, está borroso, está de espaldas o el score facial no supera el umbral, se activa **HSV del cuerpo completo/ropa + SVM Re-ID**.
+3. **Re-ID en vivo:** durante la ejecución, cuando una persona sí fue reconocida por rostro, el sistema guarda el HSV de su cuerpo completo con esa identidad y va reentrenando el **SVM Re-ID** en vivo. Así después puede reconocerla cuando deje de verse el rostro.
 4. **No se fuerza identidad:** si no hay score suficiente o falta un SVM entrenado, se marca como `desconocido`.
 
 ## Instalación en Windows
@@ -76,7 +76,7 @@ python principal.py --modo inferir --fuente 0
 Durante esta ejecución pasa esto:
 
 - Si ve la cara y reconoce con SVM facial: muestra `rostro_hog_svm`.
-- Mientras reconoce por rostro, guarda HSV del torso y entrena Re-ID en vivo.
+- Mientras reconoce por rostro, guarda HSV del cuerpo completo y entrena Re-ID en vivo.
 - Si luego la persona se gira o no se ve la cara: activa `reid_hsv_svm`.
 - Si no hay suficiente confianza: muestra `desconocido`.
 
@@ -90,7 +90,7 @@ python principal.py --modo inferir --fuente http://192.168.1.20:8080/video
 
 ## Registro Re-ID controlado opcional
 
-Este modo es opcional. Sirve para llenar `datos/reidentificacion/<identidad>/` con torso/ropa desde cámara y entrenar SVM Re-ID con datos controlados.
+Este modo es opcional. Sirve para llenar `datos/reidentificacionF/<identidad>/` con cuerpo completo/ropa desde cámara y entrenar SVM Re-ID con datos controlados.
 
 ```bat
 python principal.py --modo registrar_reid --identidad John --fuente 0 --muestras 40
@@ -110,7 +110,7 @@ python principal.py --modo demo --sin-ventana
 
 ```text
 datos/rostros/                 # dataset facial para HoG + SVM facial
-datos/reidentificacion/        # torso/ropa para HSV + SVM Re-ID opcional
+datos/reidentificacionF/       # capturas Re-ID reales confirmadas por rostro
 modelos/                       # svm_rostro.pkl y svm_reidentificacion.pkl
 modelos/buffer_reid_hsv_en_vivo.npz # HSV recolectado durante inferencia
 registros/                     # logs y metadata CSV

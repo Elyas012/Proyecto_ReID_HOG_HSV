@@ -12,6 +12,7 @@ import cv2
 import numpy as np
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, f1_score
 
+from .caracteristicas import parametros_hog_desde_config
 from .datos import construir_dataset_rostros, listar_imagenes_por_identidad
 from .modelos_svm import ArtefactosSVM, cargar_artefactos, dividir_indices_validacion, predecir_con_confianza
 
@@ -134,6 +135,9 @@ def diagnosticar_modelo_rostro(configuracion: Dict[str, object]) -> Dict[str, ob
     proporcion_validacion = float(entrenamiento.get("validacion", 0.20))
     validacion_por_clase = bool(entrenamiento.get("validacion_por_clase", True))
     omitir_sin_roi = bool(entrenamiento.get("omitir_rostros_sin_roi", True))
+    filtrar_rostros_baja_calidad = bool(entrenamiento.get("filtrar_rostros_baja_calidad", True))
+    umbrales = configuracion.get("umbrales", {})
+    parametros_hog = parametros_hog_desde_config(configuracion)
     ruta_modelo = Path(rutas["modelos"]) / "svm_rostro.pkl"
     if not ruta_modelo.exists():
         raise FileNotFoundError(f"No existe el modelo facial: {ruta_modelo}")
@@ -144,6 +148,10 @@ def diagnosticar_modelo_rostro(configuracion: Dict[str, object]) -> Dict[str, ob
         max_muestras_por_clase=max_muestras,
         semilla=semilla,
         omitir_sin_roi=omitir_sin_roi,
+        filtrar_baja_calidad=filtrar_rostros_baja_calidad,
+        tamano_minimo=int(umbrales.get("tamano_minimo_rostro", 40)),
+        nitidez_minima=float(umbrales.get("nitidez_minima", 60.0)),
+        parametros_hog=parametros_hog,
     )
     muestras_evaluacion = muestras_usadas
     if proporcion_validacion > 0 and len(etiquetas) > 0:
@@ -182,5 +190,5 @@ def resumen_dataset(configuracion: Dict[str, object]) -> Dict[str, Dict[str, int
     rutas = configuracion["rutas"]
     return {
         "rostros": _conteo_muestras(listar_imagenes_por_identidad(rutas["rostros"], "rostro")),
-        "reidentificacion": _conteo_muestras(listar_imagenes_por_identidad(rutas["reidentificacion"], "reidentificacion")),
+        "reidentificacionF": _conteo_muestras(listar_imagenes_por_identidad(rutas["reidentificacionF"], "reidentificacionF")),
     }

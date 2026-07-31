@@ -2,7 +2,7 @@
 
 Regla oficial del proyecto:
 - Identificación: rostro visible -> descriptor HoG -> SVM facial.
-- Re-identificación: rostro no visible/no reconocido -> descriptor HSV torso/ropa -> SVM Re-ID.
+- Re-identificación: rostro no visible/no reconocido -> descriptor HSV cuerpo completo/ropa -> SVM Re-ID.
 
 No se usan perfiles como reemplazo del SVM Re-ID, porque la documentación pide que
 ambos flujos terminen en clasificadores SVM.

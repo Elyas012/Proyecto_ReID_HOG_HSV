@@ -1,8 +1,8 @@
-"""Captura y entrenamiento en tiempo real para el proyecto Re-ID.
+﻿"""Captura y entrenamiento en tiempo real para el proyecto Re-ID.
 
-Este módulo resuelve el flujo práctico del laboratorio: el usuario no tiene que
-copiar imágenes manualmente para Re-ID. Puede registrar a una persona desde una
-cámara o video, el sistema detecta la persona, recorta torso/ropa, guarda muestras
+Este mÃ³dulo resuelve el flujo prÃ¡ctico del laboratorio: el usuario no tiene que
+copiar imÃ¡genes manualmente para Re-ID. Puede registrar a una persona desde una
+cÃ¡mara o video, el sistema detecta la persona completa, guarda muestras
 HSV y luego entrena el SVM Re-ID cuando existan suficientes identidades.
 """
 
@@ -19,8 +19,15 @@ from typing import Dict, Iterable, List, Tuple
 import cv2
 import numpy as np
 
-from .caracteristicas import extraer_histograma_hsv, extraer_hog_rostro, parametros_hsv_desde_config, recortar_torso, rostro_es_util
-from .datos import construir_dataset_reid, construir_dataset_rostros, guardar_imagen_bgr, guardar_metadata_csv
+from .caracteristicas import extraer_histograma_hsv, parametros_hog_desde_config, parametros_hsv_desde_config, rostro_es_util
+from .datos import (
+    construir_augmentation_reid,
+    construir_dataset_reid,
+    construir_dataset_rostros,
+    guardar_imagen_bgr,
+    guardar_metadata_csv,
+    limitar_imagenes_recientes_por_identidad,
+)
 from .deteccion import Deteccion, DetectorPersonasYOLO, DetectorRostros
 from .evaluacion import evaluar_modelo
 from .modelos_svm import dividir_indices_validacion, entrenar_modelos_principales
@@ -28,7 +35,7 @@ from .modelos_svm import dividir_indices_validacion, entrenar_modelos_principale
 
 @dataclass
 class ResumenCaptura:
-    """Resumen de una sesión de registro desde cámara o video."""
+    """Resumen de una sesiÃ³n de registro desde cÃ¡mara o video."""
 
     identidad: str
     muestras_rostro: int
@@ -40,18 +47,18 @@ class ResumenCaptura:
 def abrir_fuente_video(fuente: str):
     """Abre webcam, URL IP/RTSP/HTTP o archivo de video."""
     if str(fuente).isdigit():
-        # Comentario clave: 0 normalmente representa la cámara principal de la PC o celular por USB.
+        # Comentario clave: 0 normalmente representa la cÃ¡mara principal de la PC o celular por USB.
         return cv2.VideoCapture(int(fuente))
     return cv2.VideoCapture(str(fuente))
 
 
 def seleccionar_deteccion_principal(detecciones: Iterable[Deteccion]) -> Deteccion | None:
-    """Escoge la detección de mayor área cuando hay varias personas."""
+    """Escoge la detecciÃ³n de mayor Ã¡rea cuando hay varias personas."""
     detecciones = list(detecciones)
     if not detecciones:
         return None
 
-    # Comentario clave: para registrar una identidad se usa la persona dominante frente a la cámara.
+    # Comentario clave: para registrar una identidad se usa la persona dominante frente a la cÃ¡mara.
     return max(detecciones, key=lambda d: (d.caja[2] - d.caja[0]) * (d.caja[3] - d.caja[1]))
 
 
@@ -76,6 +83,20 @@ def contar_muestras(muestras: Iterable[object]) -> Dict[str, int]:
     """Cuenta muestras por identidad para reportar el entrenamiento usado."""
     conteo = Counter(str(muestra.identidad) for muestra in muestras)
     return {identidad: conteo[identidad] for identidad in sorted(conteo)}
+
+
+def preparar_augmentation_reidF(configuracion: Dict[str, object]) -> Dict[str, object]:
+    """Prepara la configuracion de augmentation para las capturas automaticas Re-ID."""
+    augmentation = dict(configuracion.get("augmentation_reidF", {}) or {})
+    if not bool(augmentation.get("activo", False)):
+        return {"activo": False}
+
+    aprendizaje = configuracion.get("aprendizaje_reid_en_vivo", {})
+    augmentation.setdefault(
+        "max_imagenes_por_identidad",
+        int(aprendizaje.get("max_imagenes_carpeta_por_identidad", aprendizaje.get("max_muestras_vivas_por_identidad", 50))),
+    )
+    return augmentation
 
 
 def dividir_dataset_validacion(
@@ -125,6 +146,7 @@ def guardar_resumen_entrenamiento(
     rutas = configuracion["rutas"]
     entrenamiento = configuracion.get("entrenamiento", {})
     caracteristicas = configuracion.get("caracteristicas", {})
+    augmentation_reidF = configuracion.get("augmentation_reidF", {})
     ruta_resumen = Path(rutas["reportes"]) / "resumen_entrenamiento.json"
     ruta_resumen.parent.mkdir(parents=True, exist_ok=True)
     resumen = {
@@ -142,8 +164,10 @@ def guardar_resumen_entrenamiento(
         "validacion": float(entrenamiento.get("validacion", 0.20)),
         "validacion_por_clase": bool(entrenamiento.get("validacion_por_clase", True)),
         "omitir_rostros_sin_roi": bool(entrenamiento.get("omitir_rostros_sin_roi", True)),
+        "filtrar_rostros_baja_calidad": bool(entrenamiento.get("filtrar_rostros_baja_calidad", True)),
         "descriptor_reid": str(caracteristicas.get("descriptor_reid", "hsv_espacial")),
         "parametros_hsv_reid": parametros_hsv_desde_config(configuracion),
+        "augmentation_reidF": augmentation_reidF,
         "conteo_rostro_entrenamiento": contar_muestras(muestras_rostro),
         "conteo_rostro_validacion": contar_muestras(muestras_rostro_validacion or []),
         "conteo_reid_entrenamiento": contar_muestras(muestras_reid),
@@ -171,9 +195,13 @@ def capturar_muestras_tiempo_real(
     modo_captura puede ser: reid, rostro o ambos.
     """
     rutas = configuracion.get("rutas", {})
+    aprendizaje = configuracion.get("aprendizaje_reid_en_vivo", {})
     carpeta_rostros = Path(str(rutas.get("rostros", "datos/rostros"))) / identidad
-    carpeta_reid = Path(str(rutas.get("reidentificacion", "datos/reidentificacion"))) / identidad
+    carpeta_reid = Path(str(rutas.get("reidentificacionF", "datos/reidentificacionF"))) / identidad
     ruta_metadata = Path(str(rutas.get("registros", "registros"))) / "metadata_tiempo_real.csv"
+    max_imagenes_reid = int(
+        aprendizaje.get("max_imagenes_carpeta_por_identidad", aprendizaje.get("max_muestras_vivas_por_identidad", 50))
+    )
 
     detector_personas = DetectorPersonasYOLO(
         pesos=str(configuracion.get("yolo", {}).get("pesos", "modelos/yolov8n.pt")),
@@ -189,13 +217,15 @@ def capturar_muestras_tiempo_real(
     contador_frame = 0
     muestras_reid = 0
     muestras_rostro = 0
+    objetivo_reid = muestras_objetivo if modo_captura in {"reid", "ambos"} else 0
+    objetivo_rostro = muestras_objetivo if modo_captura == "rostro" else (max(5, muestras_objetivo // 3) if modo_captura == "ambos" else 0)
     camara_id = "camara_01" if str(fuente).isdigit() else Path(str(fuente)).stem
     tiempo_inicio = time.time()
 
     print("[INFO] Registro en tiempo real iniciado. Presiona 'q' para terminar.")
     print(f"[INFO] Identidad: {identidad} | modo: {modo_captura} | fuente: {fuente}")
 
-    while muestras_reid < muestras_objetivo or (modo_captura in {"rostro", "ambos"} and muestras_rostro < max(5, muestras_objetivo // 3)):
+    while muestras_reid < objetivo_reid or muestras_rostro < objetivo_rostro:
         ok, frame = captura.read()
         if not ok:
             break
@@ -209,11 +239,12 @@ def capturar_muestras_tiempo_real(
             x1, y1, x2, y2 = principal.caja
             cv2.rectangle(salida, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
-            if modo_captura in {"reid", "ambos"} and muestras_reid < muestras_objetivo:
-                torso = recortar_torso(principal.roi)
+            if modo_captura in {"reid", "ambos"} and muestras_reid < objetivo_reid:
+                cuerpo = principal.roi
                 sample_id = f"{identidad}_{camara_id}_reid_{muestras_reid + 1:04d}"
                 ruta = carpeta_reid / f"{sample_id}.jpg"
-                guardar_imagen(ruta, torso)
+                guardar_imagen(ruta, cuerpo)
+                limitar_imagenes_recientes_por_identidad(carpeta_reid, max_imagenes_reid)
                 registrar_metadata(
                     ruta_metadata,
                     {
@@ -222,14 +253,14 @@ def capturar_muestras_tiempo_real(
                         "camera_id": camara_id,
                         "frame_number": contador_frame,
                         "bbox": list(principal.caja),
-                        "tipo": "reid_torso_hsv",
+                        "tipo": "reid_cuerpo_hsv_3_bandas",
                         "ruta": str(ruta),
                         "fecha": time.strftime("%Y-%m-%d %H:%M:%S"),
                     },
                 )
                 muestras_reid += 1
 
-            if modo_captura in {"rostro", "ambos"}:
+            if modo_captura in {"rostro", "ambos"} and muestras_rostro < objetivo_rostro:
                 rostro = detector_rostros.detectar_rostro_principal(principal.roi)
                 if rostro and rostro_es_util(rostro.roi):
                     sample_id = f"{identidad}_{camara_id}_rostro_{muestras_rostro + 1:04d}"
@@ -250,7 +281,7 @@ def capturar_muestras_tiempo_real(
                     )
                     muestras_rostro += 1
 
-            texto = f"{identidad} | rostro:{muestras_rostro} reid:{muestras_reid}/{muestras_objetivo}"
+            texto = f"{identidad} | rostro:{muestras_rostro}/{objetivo_rostro} reid:{muestras_reid}/{objetivo_reid}"
             cv2.putText(salida, texto, (x1, max(20, y1 - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
 
         if mostrar_ventana:
@@ -284,25 +315,48 @@ def entrenar_desde_capturas(configuracion: Dict[str, object]) -> Dict[str, objec
     min_muestras_reid = int(entrenamiento.get("min_muestras_reid_por_clase", 0))
     semilla = int(entrenamiento.get("semilla", 42))
     omitir_sin_roi = bool(entrenamiento.get("omitir_rostros_sin_roi", True))
+    filtrar_rostros_baja_calidad = bool(entrenamiento.get("filtrar_rostros_baja_calidad", True))
     proporcion_validacion = float(entrenamiento.get("validacion", 0.20))
     validacion_por_clase = bool(entrenamiento.get("validacion_por_clase", True))
     parametros_hsv = parametros_hsv_desde_config(configuracion)
+    parametros_hog = parametros_hog_desde_config(configuracion)
+    augmentation_reidF = preparar_augmentation_reidF(configuracion)
+    umbrales = configuracion.get("umbrales", {})
 
     vectores_rostro, etiquetas_rostro, muestras_rostro = construir_dataset_rostros(
         rutas["rostros"],
         max_muestras_por_clase=max_muestras_rostro,
         semilla=semilla,
         omitir_sin_roi=omitir_sin_roi,
+        filtrar_baja_calidad=filtrar_rostros_baja_calidad,
+        tamano_minimo=int(umbrales.get("tamano_minimo_rostro", 40)),
+        nitidez_minima=float(umbrales.get("nitidez_minima", 60.0)),
+        parametros_hog=parametros_hog,
     )
-    vectores_reid, etiquetas_reid, muestras_reid = construir_dataset_reid(
-        rutas["reidentificacion"],
-        max_muestras_por_clase=max_muestras_reid,
-        min_muestras_por_clase=min_muestras_reid,
-        semilla=semilla,
-        parametros_hsv=parametros_hsv,
-    )
+    vectores_reid = np.asarray([], dtype="float32")
+    etiquetas_reid = np.asarray([])
+    muestras_reid: List[object] = []
+    ruta_reid_vivo = rutas.get("reidentificacionF")
+    if ruta_reid_vivo and Path(str(ruta_reid_vivo)).exists():
+        vectores_reid_vivo, etiquetas_reid_vivo, muestras_reid_vivo = construir_dataset_reid(
+            ruta_reid_vivo,
+            max_muestras_por_clase=max_muestras_reid,
+            min_muestras_por_clase=min_muestras_reid,
+            semilla=semilla,
+            parametros_hsv=parametros_hsv,
+            tipo="reidentificacionF",
+            incluir_aumentadas=False,
+        )
+        if len(vectores_reid_vivo) > 0:
+            if len(vectores_reid) > 0:
+                vectores_reid = np.concatenate([vectores_reid, vectores_reid_vivo], axis=0)
+                etiquetas_reid = np.concatenate([etiquetas_reid, etiquetas_reid_vivo], axis=0)
+                muestras_reid = [*muestras_reid, *muestras_reid_vivo]
+            else:
+                vectores_reid, etiquetas_reid, muestras_reid = vectores_reid_vivo, etiquetas_reid_vivo, muestras_reid_vivo
+            print(f"[INFO] Re-ID vivo en carpeta F agregado al entrenamiento: {contar_muestras(muestras_reid_vivo)}")
 
-    # Comentario clave: se guarda metadata del entrenamiento para evidenciar qué muestras se usaron.
+    # Comentario clave: se guarda metadata del entrenamiento para evidenciar quÃ© muestras se usaron.
     (
         vectores_rostro_train,
         etiquetas_rostro_train,
@@ -333,6 +387,18 @@ def entrenar_desde_capturas(configuracion: Dict[str, object]) -> Dict[str, objec
         semilla,
         validacion_por_clase=validacion_por_clase,
     )
+
+    muestras_reidF_train = [muestra for muestra in muestras_reid_train if getattr(muestra, "tipo", "") == "reidentificacionF"]
+    vectores_reid_aug, etiquetas_reid_aug, muestras_reid_aug = construir_augmentation_reid(
+        muestras_reidF_train,
+        semilla=semilla,
+        parametros_hsv=parametros_hsv,
+        augmentacion=augmentation_reidF,
+    )
+    if len(vectores_reid_aug) > 0:
+        vectores_reid_train = np.concatenate([vectores_reid_train, vectores_reid_aug], axis=0)
+        etiquetas_reid_train = np.concatenate([etiquetas_reid_train, etiquetas_reid_aug], axis=0)
+        muestras_reid_train = [*muestras_reid_train, *muestras_reid_aug]
 
     print(f"[INFO] Split rostro train/val: {contar_muestras(muestras_rostro_train)} / {contar_muestras(muestras_rostro_val)}")
     print(f"[INFO] Split Re-ID train/val: {contar_muestras(muestras_reid_train)} / {contar_muestras(muestras_reid_val)}")
@@ -384,9 +450,9 @@ def entrenar_desde_capturas(configuracion: Dict[str, object]) -> Dict[str, objec
 
 
 def crear_dataset_demo(configuracion: Dict[str, object]) -> None:
-    """Genera un dataset pequeño de prueba con colores sintéticos para validar ejecución."""
+    """Genera un dataset pequeÃ±o de prueba con colores sintÃ©ticos para validar ejecuciÃ³n."""
     rutas = configuracion.get("rutas", {})
-    base_reid = Path(str(rutas.get("reidentificacion", "datos/reidentificacion")))
+    base_reid = Path(str(rutas.get("reidentificacionF", "datos/reidentificacionF")))
     rng = np.random.default_rng(42)
     personas = {
         "Danny_demo": (40, 40, 220),
@@ -407,3 +473,4 @@ def crear_dataset_demo(configuracion: Dict[str, object]) -> None:
             cv2.imwrite(str(carpeta / f"demo_{i + 1:03d}.jpg"), imagen)
 
     print(f"[INFO] Dataset demo creado en: {base_reid}")
+

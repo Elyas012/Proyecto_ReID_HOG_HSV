@@ -43,7 +43,7 @@ def convertir_a_gris(imagen: np.ndarray) -> np.ndarray:
 
 def extraer_hog_rostro(
     roi_rostro: np.ndarray,
-    tamano: Tuple[int, int] = (96, 96),
+    tamano: Tuple[int, int] = (128, 128),
     orientaciones: int = 9,
     pixeles_por_celda: Tuple[int, int] = (8, 8),
     celdas_por_bloque: Tuple[int, int] = (2, 2),
@@ -65,13 +65,13 @@ def extraer_hog_rostro(
 
 
 def _extraer_histograma_hsv_global(
-    roi_torso: np.ndarray,
+    roi_persona: np.ndarray,
     tamano: Tuple[int, int] = (128, 256),
     bins: Tuple[int, int, int] = (16, 16, 8),
 ) -> np.ndarray:
-    """Extrae un histograma HSV del torso/ropa para re-identificación sin rostro."""
-    torso = redimensionar_roi(asegurar_bgr(roi_torso), tamano)
-    hsv = cv2.cvtColor(torso, cv2.COLOR_BGR2HSV)
+    """Extrae un histograma HSV del cuerpo completo/ropa para re-identificacion sin rostro."""
+    persona = redimensionar_roi(asegurar_bgr(roi_persona), tamano)
+    hsv = cv2.cvtColor(persona, cv2.COLOR_BGR2HSV)
 
     # Comentario clave: HSV representa la distribución de color de la ropa, útil cuando no se ve la cara.
     histograma = cv2.calcHist([hsv], [0, 1, 2], None, bins, [0, 180, 0, 256, 0, 256])
@@ -105,6 +105,33 @@ def _limitar_int(valor: object, minimo: int, maximo: int, defecto: int) -> int:
     except (TypeError, ValueError):
         numero = defecto
     return max(minimo, min(maximo, numero))
+
+
+def parametros_hog_desde_config(configuracion: Dict[str, object]) -> Dict[str, object]:
+    """Extrae del YAML los parametros HoG del modelo facial."""
+    caracteristicas = configuracion.get("caracteristicas", {}) if isinstance(configuracion, dict) else {}
+    if not isinstance(caracteristicas, dict):
+        caracteristicas = {}
+
+    return {
+        "tamano": _normalizar_tupla_enteros(caracteristicas.get("tamano_rostro"), (128, 128)),
+        "orientaciones": _limitar_int(caracteristicas.get("hog_orientaciones", 9), 4, 18, 9),
+        "pixeles_por_celda": _normalizar_tupla_enteros(caracteristicas.get("hog_pixeles_por_celda"), (8, 8)),
+        "celdas_por_bloque": _normalizar_tupla_enteros(caracteristicas.get("hog_celdas_por_bloque"), (2, 2)),
+    }
+
+
+def dimension_hog_rostro(parametros: Dict[str, object]) -> int:
+    """Calcula la dimension esperada del descriptor HoG facial."""
+    ancho, alto = _normalizar_tupla_enteros(parametros.get("tamano"), (128, 128))
+    celda_x, celda_y = _normalizar_tupla_enteros(parametros.get("pixeles_por_celda"), (8, 8))
+    bloque_x, bloque_y = _normalizar_tupla_enteros(parametros.get("celdas_por_bloque"), (2, 2))
+    orientaciones = _limitar_int(parametros.get("orientaciones", 9), 4, 18, 9)
+    celdas_x = max(1, ancho // celda_x)
+    celdas_y = max(1, alto // celda_y)
+    bloques_x = max(0, celdas_x - bloque_x + 1)
+    bloques_y = max(0, celdas_y - bloque_y + 1)
+    return int(bloques_x * bloques_y * bloque_x * bloque_y * orientaciones)
 
 
 def parametros_hsv_desde_config(configuracion: Dict[str, object]) -> Dict[str, object]:
@@ -171,7 +198,7 @@ def _momentos_hsv_region(region_bgr: np.ndarray) -> np.ndarray:
 
 
 def extraer_histograma_hsv(
-    roi_torso: np.ndarray,
+    roi_persona: np.ndarray,
     tamano: Tuple[int, int] = (128, 256),
     bins: Tuple[int, int, int] = (16, 16, 8),
     bandas_horizontales: int = 3,
@@ -181,22 +208,22 @@ def extraer_histograma_hsv(
     recorte_superior: float = 0.0,
     recorte_inferior: float = 0.0,
 ) -> np.ndarray:
-    """Extrae HSV espacial del torso/ropa para re-identificacion sin rostro."""
-    torso = redimensionar_roi(asegurar_bgr(roi_torso), tamano)
-    torso = recortar_margenes_reid(torso, recorte_lateral, recorte_superior, recorte_inferior)
+    """Extrae HSV espacial del cuerpo completo/ropa para re-identificacion sin rostro."""
+    persona = redimensionar_roi(asegurar_bgr(roi_persona), tamano)
+    persona = recortar_margenes_reid(persona, recorte_lateral, recorte_superior, recorte_inferior)
     bandas_horizontales = max(1, min(8, int(bandas_horizontales)))
 
     regiones = []
     if usar_global or bandas_horizontales == 1:
-        regiones.append(torso)
+        regiones.append(persona)
 
     if bandas_horizontales > 1:
-        alto = torso.shape[0]
+        alto = persona.shape[0]
         for indice in range(bandas_horizontales):
             y1 = int(indice * alto / bandas_horizontales)
             y2 = int((indice + 1) * alto / bandas_horizontales)
             if y2 > y1:
-                regiones.append(torso[y1:y2, :])
+                regiones.append(persona[y1:y2, :])
 
     # Comentario clave: las bandas hacen que dos personas con colores parecidos no queden tan iguales.
     partes = []
@@ -229,7 +256,7 @@ def recortar_torso(
     porcentaje_superior: float = 0.25,
     porcentaje_inferior: float = 0.90,
 ) -> np.ndarray:
-    """Obtiene la zona aproximada de torso/ropa dentro del ROI de una persona."""
+    """Funcion heredada: obtiene una zona aproximada de torso/ropa dentro del ROI de una persona."""
     if roi_persona is None or roi_persona.size == 0:
         raise ValueError("El ROI de persona está vacío.")
 
@@ -237,7 +264,7 @@ def recortar_torso(
     y1 = int(alto * porcentaje_superior)
     y2 = int(alto * porcentaje_inferior)
 
-    # Comentario clave: se evita la parte baja/piernas para priorizar color de torso y camiseta.
+    # Comentario clave: funcion heredada para capturas antiguas; la Re-ID actual usa cuerpo completo.
     return roi_persona[y1:y2, 0:ancho]
 
 
