@@ -13,6 +13,8 @@ ejecucion:
 rendimiento:
   reservar_nucleos: 1
   hilos_cpu: 0
+  # Para video conviene limitar hilos: evita que YOLO/OpenCV ocupen toda la CPU y congelen la UI.
+  hilos_cpu_video: 4
   hilos_cpu_multicamara: 0
 
 # Se activa solo con: python principal.py --modo inferir
@@ -88,8 +90,7 @@ umbrales:
 # de la persona detectada, util para videos de pasillos/camaras lejanas.
 rostro_en_persona:
   usar_zoom_si_no_detecta: true
-  factor_zoom: 3.0
-  factores_zoom: [2.0, 3.0, 4.0]
+  factor_zoom: 4.0
   porcentaje_superior: 0.45
   tamano_minimo_zoom: 18
   usar_roi_zoom_para_clasificar: true
@@ -121,13 +122,17 @@ aprendizaje_reid_en_vivo:
   guardar_capturas: true
   carpeta_capturas: datos/reidentificacionF
   minimo_por_identidad: 3
-  reentrenar_cada: 4
+  reentrenar_cada: 20
+  # true = el reentrenamiento Re-ID no bloquea el video ni congela ROIs.
+  reentrenar_async: true
+  # Guarda el buffer cada N muestras vivas para reducir escritura a disco durante video.
+  guardar_buffer_cada: 4
   reentrenar_combinado_al_iniciar: true
   modelo_salida: svm_reidentificacion_combinado.pkl
   usar_modelo_en_vivo: true
-  max_muestras_vivas_por_identidad: 50
-  max_imagenes_carpeta_por_identidad: 60
-  score_rostro_min_aprendizaje: 0.75
+  max_muestras_vivas_por_identidad: 100
+  max_imagenes_carpeta_por_identidad: 100
+  score_rostro_min_aprendizaje: 0.85
   margen_rostro_min_aprendizaje: 0.20
 
 augmentation_reidF:
@@ -136,7 +141,7 @@ augmentation_reidF:
   cantidad_por_imagen: 1
   guardar_imagenes: true
   # Se generan en la misma carpeta datos/reidentificacionF/<identidad>/ como *_aug_XX.jpg.
-  max_imagenes_por_identidad: 50
+  max_imagenes_por_identidad: 100
   brillo: 18.0
   contraste: 0.12
   ruido_std: 3.0

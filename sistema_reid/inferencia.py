@@ -87,7 +87,7 @@ class MotorInferencia:
             self.entrenador_reid = EntrenadorReIDEnVivo(
                 carpeta_modelos=modelos,
                 minimo_por_identidad=int(aprendizaje.get("minimo_por_identidad", 4)),
-                reentrenar_cada=int(aprendizaje.get("reentrenar_cada", 8)),
+                reentrenar_cada=int(aprendizaje.get("reentrenar_cada", 20)),
                 kernel=str(
                     configuracion.get("entrenamiento", {}).get(
                         "kernel_reid",
@@ -110,6 +110,8 @@ class MotorInferencia:
                         aprendizaje.get("max_muestras_vivas_por_identidad", 50),
                     )
                 ),
+                reentrenar_async=bool(aprendizaje.get("reentrenar_async", True)),
+                guardar_buffer_cada=int(aprendizaje.get("guardar_buffer_cada", aprendizaje.get("reentrenar_cada", 20))),
             )
 
     def estado_reid_vivo(self) -> Dict[str, int]:
@@ -136,40 +138,31 @@ class MotorInferencia:
         if zona_superior.size == 0:
             return None
 
-        factores_config = config_zoom.get("factores_zoom", config_zoom.get("factor_zoom", 2.5))
-        if isinstance(factores_config, (list, tuple)):
-            factores_zoom = [float(factor) for factor in factores_config]
-        else:
-            factores_zoom = [float(factores_config)]
-
+        factor_zoom = max(1.0, min(6.0, float(config_zoom.get("factor_zoom", 3.0))))
         tamano_minimo_zoom = int(config_zoom.get("tamano_minimo_zoom", 18))
         usar_roi_zoom = bool(config_zoom.get("usar_roi_zoom_para_clasificar", True))
-        for factor_zoom in factores_zoom:
-            factor_zoom = max(1.0, min(6.0, factor_zoom))
-            ancho_zoom = max(1, int(zona_superior.shape[1] * factor_zoom))
-            alto_zoom = max(1, int(zona_superior.shape[0] * factor_zoom))
-            zona_zoom = cv2.resize(zona_superior, (ancho_zoom, alto_zoom), interpolation=cv2.INTER_CUBIC)
+        ancho_zoom = max(1, int(zona_superior.shape[1] * factor_zoom))
+        alto_zoom = max(1, int(zona_superior.shape[0] * factor_zoom))
+        zona_zoom = cv2.resize(zona_superior, (ancho_zoom, alto_zoom), interpolation=cv2.INTER_CUBIC)
 
-            rostros = self.detector_rostros.detectar_rostros(zona_zoom, tamano_minimo=tamano_minimo_zoom)
-            if not rostros:
-                continue
+        rostros = self.detector_rostros.detectar_rostros(zona_zoom, tamano_minimo=tamano_minimo_zoom)
+        if not rostros:
+            return None
 
-            rostro_zoom = rostros[0]
-            zx1, zy1, zx2, zy2 = rostro_zoom.caja
-            x1 = int(zx1 / factor_zoom)
-            y1 = int(zy1 / factor_zoom)
-            x2 = int(zx2 / factor_zoom)
-            y2 = int(zy2 / factor_zoom)
-            x1 = max(0, min(x1, ancho - 1))
-            y1 = max(0, min(y1, alto - 1))
-            x2 = max(x1 + 1, min(x2, ancho))
-            y2 = max(y1 + 1, min(y2, alto))
-            roi_rostro = rostro_zoom.roi if usar_roi_zoom else roi_persona[y1:y2, x1:x2]
-            if roi_rostro.size == 0:
-                continue
-            return Deteccion(caja=(x1, y1, x2, y2), score=rostro_zoom.score, clase=0, roi=roi_rostro)
-
-        return None
+        rostro_zoom = rostros[0]
+        zx1, zy1, zx2, zy2 = rostro_zoom.caja
+        x1 = int(zx1 / factor_zoom)
+        y1 = int(zy1 / factor_zoom)
+        x2 = int(zx2 / factor_zoom)
+        y2 = int(zy2 / factor_zoom)
+        x1 = max(0, min(x1, ancho - 1))
+        y1 = max(0, min(y1, alto - 1))
+        x2 = max(x1 + 1, min(x2, ancho))
+        y2 = max(y1 + 1, min(y2, alto))
+        roi_rostro = rostro_zoom.roi if usar_roi_zoom else roi_persona[y1:y2, x1:x2]
+        if roi_rostro.size == 0:
+            return None
+        return Deteccion(caja=(x1, y1, x2, y2), score=rostro_zoom.score, clase=0, roi=roi_rostro)
 
     def _caja_rostro_absoluta(self, deteccion_persona: Deteccion, deteccion_rostro: Deteccion) -> tuple[int, int, int, int]:
         """Convierte la caja de rostro relativa al ROI de persona a coordenadas del frame."""
@@ -240,7 +233,7 @@ class MotorInferencia:
             return dict(self.estado_reid_vivo_actual)
 
         actualizado = self.entrenador_reid.agregar_muestra(identidad, vector_hsv, roi_persona)
-        if actualizado and self.entrenador_reid.modelo is not None:
+        if (actualizado or self.entrenador_reid.modelo is not None) and self.entrenador_reid.modelo is not None:
             self.modelo_reid = self.entrenador_reid.modelo
         self.estado_reid_vivo_actual = self.entrenador_reid.resumen()
         return dict(self.estado_reid_vivo_actual)
@@ -398,6 +391,11 @@ def normalizar_modo_cajas(modo: str) -> str:
     return "ambas"
 
 
+def formatear_porcentaje(score: float) -> str:
+    """Muestra el score interno 0..1 como porcentaje legible."""
+    return f"{max(0.0, min(1.0, float(score))) * 100:.1f}%"
+
+
 def ajustar_texto_a_ancho(texto: str, ancho_maximo: int, escala: float, grosor: int) -> str:
     """Recorta texto para que no invada otras cajas o salga del frame."""
     if ancho_maximo <= 30:
@@ -440,7 +438,7 @@ def dibujar_resultados(frame: np.ndarray, resultados: List[ResultadoIdentidad], 
 
     for resultado in resultados:
         x1, y1, x2, y2 = resultado.caja
-        texto = f"{resultado.identidad} | {resultado.metodo} | {resultado.score:.2f}"
+        texto = f"{resultado.identidad} {formatear_porcentaje(resultado.score)} | {resultado.metodo}"
 
         # Comentario clave: verde para identidad aceptada, amarillo/naranja para desconocido o revisión.
         color = (0, 255, 0) if resultado.identidad != "desconocido" else (0, 180, 255)

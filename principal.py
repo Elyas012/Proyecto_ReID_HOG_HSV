@@ -79,7 +79,7 @@ def obtener_fuente_defecto(configuracion: Dict[str, object]) -> str:
     return "0"
 
 
-def configurar_uso_cpu(configuracion: Dict[str, object], multicamara: bool = False) -> None:
+def configurar_uso_cpu(configuracion: Dict[str, object], multicamara: bool = False, video: bool = False) -> None:
     """Ajusta hilos de CPU para mejorar FPS sin ocupar todos los nucleos."""
     rendimiento = configuracion.get("rendimiento", {})
     nucleos = max(1, os.cpu_count() or 1)
@@ -90,6 +90,10 @@ def configurar_uso_cpu(configuracion: Dict[str, object], multicamara: bool = Fal
         hilos = int(rendimiento.get("hilos_cpu_multicamara", 0) or 0)
         if hilos <= 0:
             hilos = min(max(2, hilos_auto), 6)
+    elif video:
+        hilos = int(rendimiento.get("hilos_cpu_video", 0) or 0)
+        if hilos <= 0:
+            hilos = min(max(2, hilos_auto), 4)
     else:
         hilos = int(rendimiento.get("hilos_cpu", 0) or 0)
         if hilos <= 0:
@@ -475,20 +479,16 @@ def detectar_rostros_por_persona(
             porcentaje_superior = max(0.10, min(1.0, float(config_zoom.get("porcentaje_superior", 0.45))))
             y2_superior = max(1, min(alto, int(alto * porcentaje_superior)))
             zona_superior = roi_persona[:y2_superior, :]
-            factores_config = config_zoom.get("factores_zoom", config_zoom.get("factor_zoom", 3.0))
-            factores_zoom = [float(factor) for factor in factores_config] if isinstance(factores_config, (list, tuple)) else [float(factores_config)]
+            factor_zoom = max(1.0, min(6.0, float(config_zoom.get("factor_zoom", 3.0))))
             tamano_minimo_zoom = int(config_zoom.get("tamano_minimo_zoom", 18))
 
-            for factor_zoom in factores_zoom:
-                factor_zoom = max(1.0, min(6.0, factor_zoom))
-                zona_zoom = cv2.resize(
-                    zona_superior,
-                    (max(1, int(zona_superior.shape[1] * factor_zoom)), max(1, int(zona_superior.shape[0] * factor_zoom))),
-                    interpolation=cv2.INTER_CUBIC,
-                )
-                rostros_zoom = detector_rostros.detectar_rostros(zona_zoom, tamano_minimo=tamano_minimo_zoom)
-                if not rostros_zoom:
-                    continue
+            zona_zoom = cv2.resize(
+                zona_superior,
+                (max(1, int(zona_superior.shape[1] * factor_zoom)), max(1, int(zona_superior.shape[0] * factor_zoom))),
+                interpolation=cv2.INTER_CUBIC,
+            )
+            rostros_zoom = detector_rostros.detectar_rostros(zona_zoom, tamano_minimo=tamano_minimo_zoom)
+            if rostros_zoom:
                 rostro_zoom = rostros_zoom[0]
                 zx1, zy1, zx2, zy2 = rostro_zoom.caja
                 x1 = max(0, min(int(zx1 / factor_zoom), ancho - 1))
@@ -497,7 +497,6 @@ def detectar_rostros_por_persona(
                 y2 = max(y1 + 1, min(int(zy2 / factor_zoom), alto))
                 rostro = replace(rostro_zoom, caja=(x1, y1, x2, y2), roi=roi_persona[y1:y2, x1:x2])
                 origen = "ROI rostro zoom"
-                break
 
         if rostro is None:
             continue
@@ -822,10 +821,17 @@ def ejecutar_inferencia_multicamara(configuracion: dict, fuentes: List[Tuple[str
 
 def ejecutar_inferencia(configuracion: dict, fuente: str) -> None:
     """Ejecuta inferencia sobre imagen, video, URL o cámara."""
-    configurar_uso_cpu(configuracion, multicamara=False)
+    entrada, tipo = abrir_fuente(fuente)
+    fuente_es_video = tipo == "video" and es_archivo_video(fuente)
+    configurar_uso_cpu(configuracion, multicamara=False, video=(tipo == "video"))
+    if fuente_es_video:
+        video_config_previa = configuracion.get("video", {})
+        tamano_yolo_video_previo = int(video_config_previa.get("tamano_yolo", 416))
+        if tamano_yolo_video_previo > 0:
+            yolo = configuracion.setdefault("yolo", {})
+            yolo["tamano_imagen"] = min(int(yolo.get("tamano_imagen", tamano_yolo_video_previo)), tamano_yolo_video_previo)
     motor = MotorInferencia(configuracion)
     motor.cargar_modelos()
-    entrada, tipo = abrir_fuente(fuente)
     carpeta_salida = Path(configuracion["rutas"]["salidas"])
     carpeta_registros = Path(configuracion["rutas"]["registros"])
     carpeta_salida.mkdir(parents=True, exist_ok=True)
@@ -849,7 +855,6 @@ def ejecutar_inferencia(configuracion: dict, fuente: str) -> None:
     if not captura.isOpened():
         raise RuntimeError(f"No se pudo abrir la fuente de video: {fuente}")
 
-    fuente_es_video = es_archivo_video(fuente)
     total_frames_video = int(captura.get(cv2.CAP_PROP_FRAME_COUNT) or 0) if fuente_es_video else 0
     video_config = configuracion.get("video", {})
     respetar_resolucion_original = bool(video_config.get("respetar_resolucion_original", True))
@@ -866,11 +871,7 @@ def ejecutar_inferencia(configuracion: dict, fuente: str) -> None:
     max_desfase_roi = max(0, int(video_config.get("max_desfase_roi_frames", 0)))
     respetar_fps_video = bool(video_config.get("respetar_fps", True))
     saltar_atrasados = bool(video_config.get("saltar_frames_atrasados", True))
-    tamano_yolo_video = int(video_config.get("tamano_yolo", 416))
     inferencia_async_video = bool(fuente_es_video and modo_fluido_video)
-    if fuente_es_video and tamano_yolo_video > 0:
-        yolo = configuracion.setdefault("yolo", {})
-        yolo["tamano_imagen"] = min(int(yolo.get("tamano_imagen", tamano_yolo_video)), tamano_yolo_video)
 
     frame_numero = 0
     ultimo_tiempo = time.time()
@@ -926,14 +927,17 @@ def ejecutar_inferencia(configuracion: dict, fuente: str) -> None:
             except cv2.error:
                 pass
 
-    def lanzar_inferencia_video(frame_modelo: np.ndarray, numero_frame: int) -> None:
-        """Entrega siempre el frame mas reciente al trabajador de inferencia."""
+    def lanzar_inferencia_video(frame_modelo: np.ndarray, numero_frame: int) -> bool:
+        """Entrega un frame al trabajador solo cuando no hay inferencia pendiente."""
         nonlocal frame_pendiente, numero_frame_pendiente
 
         with lock_inferencia:
-            frame_pendiente = frame_modelo
+            if inferencia_ocupada or frame_pendiente is not None:
+                return False
+            frame_pendiente = frame_modelo.copy()
             numero_frame_pendiente = numero_frame
             evento_inferencia.set()
+            return True
 
     def trabajador_inferencia_video() -> None:
         """Procesa el ultimo frame disponible y descarta pendientes antiguos."""
@@ -989,7 +993,7 @@ def ejecutar_inferencia(configuracion: dict, fuente: str) -> None:
         debe_procesar = not fuente_es_video or not resultados_ultimo or (frame_numero - 1) % procesar_cada == 0
         if inferencia_async_video:
             if debe_procesar:
-                lanzar_inferencia_video(frame_proceso.copy(), frame_numero)
+                lanzar_inferencia_video(frame_proceso, frame_numero)
         elif debe_procesar:
             inicio = time.time()
             resultados_nuevos = motor.procesar_frame(frame_proceso)

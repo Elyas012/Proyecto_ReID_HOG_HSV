@@ -12,7 +12,7 @@ import yaml
 CONFIGURACION_DEFECTO: Dict[str, Any] = {
     "proyecto": {"nombre": "Proyecto_ReID_HOG_HSV_Documentacion_OK"},
     "ejecucion": {"dispositivo": "cpu", "mostrar_ventana": True, "guardar_salida": True},
-    "rendimiento": {"reservar_nucleos": 1, "hilos_cpu": 0, "hilos_cpu_multicamara": 0},
+    "rendimiento": {"reservar_nucleos": 1, "hilos_cpu": 0, "hilos_cpu_video": 4, "hilos_cpu_multicamara": 0},
     "multicamara": {
         "activo_sin_fuente_en_inferir": True,
         "max_camaras": 4,
@@ -45,13 +45,12 @@ CONFIGURACION_DEFECTO: Dict[str, Any] = {
     "rostro_en_persona": {
         "usar_zoom_si_no_detecta": True,
         "factor_zoom": 3.0,
-        "factores_zoom": [2.0, 3.0, 4.0],
         "porcentaje_superior": 0.45,
         "tamano_minimo_zoom": 18,
         "usar_roi_zoom_para_clasificar": True,
     },
     "caracteristicas": {
-        "tamano_rostro": [128, 128],
+        "tamano_rostro": [96, 96],
         "hog_orientaciones": 9,
         "hog_pixeles_por_celda": [8, 8],
         "hog_celdas_por_bloque": [2, 2],
@@ -95,7 +94,9 @@ CONFIGURACION_DEFECTO: Dict[str, Any] = {
         "guardar_capturas": True,
         "carpeta_capturas": "datos/reidentificacionF",
         "minimo_por_identidad": 4,
-        "reentrenar_cada": 8,
+        "reentrenar_cada": 20,
+        "reentrenar_async": True,
+        "guardar_buffer_cada": 4,
         "reentrenar_combinado_al_iniciar": True,
         "modelo_salida": "svm_reidentificacion_combinado.pkl",
         "usar_modelo_en_vivo": True,

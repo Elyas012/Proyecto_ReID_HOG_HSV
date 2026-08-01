@@ -9,6 +9,7 @@ Luego, si el rostro deja de verse o no supera el umbral, se usa ese SVM Re-ID.
 from __future__ import annotations
 
 import re
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -27,7 +28,7 @@ class EntrenadorReIDEnVivo:
 
     carpeta_modelos: Path
     minimo_por_identidad: int = 4
-    reentrenar_cada: int = 8
+    reentrenar_cada: int = 20
     kernel: str = "rbf"
     probabilidad: bool = True
     nombre_modelo: str = "svm_reidentificacion_en_vivo.pkl"
@@ -38,12 +39,16 @@ class EntrenadorReIDEnVivo:
     carpeta_capturas: Optional[Path] = None
     guardar_capturas: bool = True
     max_imagenes_carpeta_por_identidad: int = 50
+    reentrenar_async: bool = True
+    guardar_buffer_cada: int = 4
     vectores_base: List[np.ndarray] = field(default_factory=list)
     etiquetas_base: List[str] = field(default_factory=list)
     vectores: List[np.ndarray] = field(default_factory=list)
     etiquetas: List[str] = field(default_factory=list)
     muestras_nuevas: int = 0
     modelo: Optional[ArtefactosSVM] = None
+    _reentrenando: bool = False
+    _lock_reentrenamiento: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
 
     @property
     def ruta_buffer(self) -> Path:
@@ -238,11 +243,35 @@ class EntrenadorReIDEnVivo:
         self.guardar_captura_reid(identidad, imagen_bgr)
         self._limitar_buffer_vivo()
         self.muestras_nuevas += 1
-        self.guardar_buffer()
+        guardar_cada = max(1, int(self.guardar_buffer_cada))
+        debe_reentrenar = self.muestras_nuevas >= self.reentrenar_cada
+        if debe_reentrenar or self.muestras_nuevas % guardar_cada == 0:
+            self.guardar_buffer()
 
         # Comentario clave: se reentrena por lotes para no frenar cada frame de la cámara.
-        if self.muestras_nuevas >= self.reentrenar_cada:
+        if debe_reentrenar and self.reentrenar_async:
+            return self.entrenar_en_segundo_plano()
+        if debe_reentrenar:
             return self.entrenar_si_es_posible()
+        return False
+
+    def entrenar_en_segundo_plano(self) -> bool:
+        """Lanza el reentrenamiento Re-ID sin bloquear el video."""
+        with self._lock_reentrenamiento:
+            if self._reentrenando:
+                return False
+            self._reentrenando = True
+
+        def tarea() -> None:
+            try:
+                self.entrenar_si_es_posible()
+            except Exception as exc:
+                print(f"[AVISO] Reentrenamiento Re-ID en segundo plano fallo: {exc}")
+            finally:
+                with self._lock_reentrenamiento:
+                    self._reentrenando = False
+
+        threading.Thread(target=tarea, name="reid-vivo-entrenamiento", daemon=True).start()
         return False
 
     def entrenar_si_es_posible(self) -> bool:

@@ -10,7 +10,7 @@ from typing import Dict, Iterable, Optional
 import cv2
 import numpy as np
 
-from .inferencia import ResultadoIdentidad
+from .inferencia import ResultadoIdentidad, formatear_porcentaje
 
 
 class PanelControlInferencia:
@@ -174,7 +174,7 @@ class PanelControlInferencia:
         y = self._texto(panel_contenido, "Prediccion actual", 22, y, color=(255, 255, 255), grosor=2, avance=30)
         if resultados:
             for indice, resultado in enumerate(resultados[:3], start=1):
-                y = self._texto(panel_contenido, f"{indice}. {resultado.identidad}  {resultado.score:.3f}", 28, y, color=(110, 230, 150), grosor=2, avance=24)
+                y = self._texto(panel_contenido, f"{indice}. {resultado.identidad}  {formatear_porcentaje(resultado.score)}", 28, y, color=(110, 230, 150), grosor=2, avance=24)
                 y = self._texto(panel_contenido, resultado.metodo, 42, y, color=(190, 190, 190), escala=0.45, avance=20)
                 if resultado.ranking:
                     y = self._ranking(panel_contenido, resultado.ranking, y)
@@ -332,5 +332,5 @@ class PanelControlInferencia:
     def _ranking(self, imagen: np.ndarray, ranking: Dict[str, float], y: int, limite: int = 4, avance: int = 18) -> int:
         mejores = sorted(ranking.items(), key=lambda item: item[1], reverse=True)[:limite]
         for nombre, score in mejores:
-            y = self._texto(imagen, f"{nombre}: {score:.3f}", 58, y, color=(170, 170, 170), escala=0.40 if avance < 18 else 0.42, avance=avance)
+            y = self._texto(imagen, f"{nombre}: {formatear_porcentaje(score)}", 58, y, color=(170, 170, 170), escala=0.40 if avance < 18 else 0.42, avance=avance)
         return y
