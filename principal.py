@@ -479,9 +479,9 @@ def detectar_rostros_por_persona(
             porcentaje_superior = max(0.10, min(1.0, float(config_zoom.get("porcentaje_superior", 0.45))))
             y2_superior = max(1, min(alto, int(alto * porcentaje_superior)))
             zona_superior = roi_persona[:y2_superior, :]
-            factor_zoom = max(1.0, min(6.0, float(config_zoom.get("factor_zoom", 3.0))))
             tamano_minimo_zoom = int(config_zoom.get("tamano_minimo_zoom", 18))
 
+            factor_zoom = max(1.0, min(6.0, float(config_zoom.get("factor_zoom", 3.0))))
             zona_zoom = cv2.resize(
                 zona_superior,
                 (max(1, int(zona_superior.shape[1] * factor_zoom)), max(1, int(zona_superior.shape[0] * factor_zoom))),
@@ -965,9 +965,9 @@ def ejecutar_inferencia(configuracion: dict, fuente: str) -> None:
                 fps_inferencia = 1.0 / max(0.001, time.time() - inicio)
                 guardar_log_predicciones(carpeta_registros / "predicciones.csv", numero_frame, resultados, fps_inferencia)
                 with lock_inferencia:
-                    if resultados or not resultados_ultimo:
-                        resultados_ultimo = resultados
-                        frame_resultados_ultimo = numero_frame
+                    # Un resultado vacio tambien es informacion nueva: limpia ROIs cuando ya no hay personas.
+                    resultados_ultimo = resultados
+                    frame_resultados_ultimo = numero_frame
                     fps_ultimo = fps_inferencia
             except Exception as exc:
                 print(f"[AVISO] Inferencia de video fallida: {exc}")
@@ -997,9 +997,8 @@ def ejecutar_inferencia(configuracion: dict, fuente: str) -> None:
         elif debe_procesar:
             inicio = time.time()
             resultados_nuevos = motor.procesar_frame(frame_proceso)
-            if resultados_nuevos or not resultados_ultimo:
-                resultados_ultimo = resultados_nuevos
-                frame_resultados_ultimo = frame_numero
+            resultados_ultimo = resultados_nuevos
+            frame_resultados_ultimo = frame_numero
             fps_ultimo = 1.0 / max(0.001, time.time() - inicio)
             guardar_log_predicciones(carpeta_registros / "predicciones.csv", frame_numero, resultados_nuevos, fps_ultimo)
 

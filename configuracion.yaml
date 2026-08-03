@@ -39,7 +39,7 @@ video:
   ancho_vista: 1280
   alto_vista: 720
   # Cada cuantos frames se intenta analizar con IA. 1 = mas preciso, 3-5 = mas fluido.
-  procesar_cada_n_frames: 2
+  procesar_cada_n_frames: 3
   # true = el video no espera a la IA; usa el ultimo resultado disponible sin congelar.
   modo_fluido: true
   # 0 = no oculta cajas por desfase; recomendado para que los ROIs sigan visibles en video.
@@ -82,9 +82,9 @@ yolo:
 umbrales:
   score_rostro: 0.70
   margen_rostro: 0.05
-  score_reid: 0.60
-  nitidez_minima: 30.0
-  tamano_minimo_rostro: 30
+  score_reid: 0.30
+  nitidez_minima: 10.0
+  tamano_minimo_rostro: 20.0
 
 # Segundo intento antes de activar Re-ID: busca rostro con zoom en la parte superior
 # de la persona detectada, util para videos de pasillos/camaras lejanas.
@@ -100,7 +100,7 @@ caracteristicas:
   # hsv_espacial = histograma HSV global + bandas horizontales del cuerpo completo/ropa.
   # Esto hace que Re-ID no mire solo "colores presentes", sino tambien donde estan en la persona.
   descriptor_reid: hsv_espacial
-  tamano_rostro: [128, 128]
+  tamano_rostro: [96, 96]
   hog_orientaciones: 9
   hog_pixeles_por_celda: [8, 8]
   hog_celdas_por_bloque: [2, 2]
@@ -121,7 +121,7 @@ aprendizaje_reid_en_vivo:
   combinar_con_reid_fijo: true
   guardar_capturas: true
   carpeta_capturas: datos/reidentificacionF
-  minimo_por_identidad: 3
+  minimo_por_identidad: 4
   reentrenar_cada: 20
   # true = el reentrenamiento Re-ID no bloquea el video ni congela ROIs.
   reentrenar_async: true
