@@ -204,6 +204,7 @@ def construir_dataset_rostros(
     tamano_minimo: int = 40,
     nitidez_minima: float = 60.0,
     parametros_hog: Optional[Dict[str, object]] = None,
+    configuracion: Optional[Dict[str, object]] = None,
 ) -> Tuple[np.ndarray, np.ndarray, List[MuestraImagen]]:
     """Construye vectores HoG y etiquetas desde datos/rostros/<identidad>."""
     muestras = listar_imagenes_por_identidad(carpeta_rostros, tipo="rostro")
@@ -213,7 +214,7 @@ def construir_dataset_rostros(
     muestras_usadas: List[MuestraImagen] = []
     omitidas = 0
     usadas_sin_roi = 0
-    detector_rostros = DetectorRostros()
+    detector_rostros = DetectorRostros.desde_config(configuracion or {})
     omitidas_calidad = 0
     parametros_hog = parametros_hog or {}
 

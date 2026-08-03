@@ -27,6 +27,7 @@ from .caracteristicas import (
     parametros_hsv_desde_config,
     rostro_es_util,
 )
+from .configuracion import resolver_limites_entrenamiento
 from .deteccion import Deteccion, DetectorPersonasYOLO, DetectorRostros
 from .modelos_svm import ArtefactosSVM, cargar_artefactos, predecir_con_confianza
 from .reid_en_vivo import EntrenadorReIDEnVivo
@@ -65,7 +66,7 @@ class MotorInferencia:
 
         self.modelo_rostro: Optional[ArtefactosSVM] = None
         self.modelo_reid: Optional[ArtefactosSVM] = None
-        self.detector_rostros = DetectorRostros()
+        self.detector_rostros = DetectorRostros.desde_config(configuracion)
         self.parametros_hog = parametros_hog_desde_config(configuracion)
         self.parametros_hsv = parametros_hsv_desde_config(configuracion)
         self.estado_reid_vivo_actual: Dict[str, int] = {}
@@ -198,20 +199,21 @@ class MotorInferencia:
 
         if self.entrenador_reid:
             entrenamiento = self.configuracion.get("entrenamiento", {})
+            limites = resolver_limites_entrenamiento(self.configuracion)
             rutas_reid = self.configuracion.get("rutas", {})
             fuentes_reid_base = [
                 ("reidentificacionF", rutas_reid.get("reidentificacionF", "datos/reidentificacionF")),
             ]
-            self.entrenador_reid.cargar_bases_reid(
+            self.entrenador_reid.configurar_bases_pendientes(
                 fuentes_reid_base,
-                max_muestras_por_clase=int(entrenamiento.get("max_muestras_reid_por_clase", entrenamiento.get("max_muestras_por_clase", 0))),
-                min_muestras_por_clase=int(entrenamiento.get("min_muestras_reid_por_clase", 0)),
+                max_muestras_por_clase=limites["max_muestras_reid_por_clase"],
+                min_muestras_por_clase=limites["min_muestras_reid_por_clase"],
                 semilla=int(entrenamiento.get("semilla", 42)),
             )
+            if self.usar_reid_en_vivo and self.reentrenar_combinado_al_iniciar:
+                self.entrenador_reid.asegurar_bases_cargadas()
             self.entrenador_reid.cargar_estado()
             if self.usar_reid_en_vivo and self.reentrenar_combinado_al_iniciar:
-                self.entrenador_reid.entrenar_si_es_posible()
-            elif self.usar_reid_en_vivo and self.entrenador_reid.modelo is None and self.entrenador_reid.etiquetas:
                 self.entrenador_reid.entrenar_si_es_posible()
             if self.usar_reid_en_vivo and self.entrenador_reid.modelo is not None:
                 self.modelo_reid = self.entrenador_reid.modelo

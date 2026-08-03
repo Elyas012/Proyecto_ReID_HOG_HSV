@@ -152,6 +152,7 @@ def diagnosticar_modelo_rostro(configuracion: Dict[str, object]) -> Dict[str, ob
         tamano_minimo=int(umbrales.get("tamano_minimo_rostro", 40)),
         nitidez_minima=float(umbrales.get("nitidez_minima", 60.0)),
         parametros_hog=parametros_hog,
+        configuracion=configuracion,
     )
     muestras_evaluacion = muestras_usadas
     if proporcion_validacion > 0 and len(etiquetas) > 0:

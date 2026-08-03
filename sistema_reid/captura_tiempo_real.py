@@ -20,6 +20,7 @@ import cv2
 import numpy as np
 
 from .caracteristicas import extraer_histograma_hsv, parametros_hog_desde_config, parametros_hsv_desde_config, rostro_es_util
+from .configuracion import resolver_limites_entrenamiento
 from .datos import (
     construir_augmentation_reid,
     construir_dataset_reid,
@@ -53,7 +54,7 @@ def abrir_fuente_video(fuente: str):
 
 
 def seleccionar_deteccion_principal(detecciones: Iterable[Deteccion]) -> Deteccion | None:
-    """Escoge la detecciÃ³n de mayor Ã¡rea cuando hay varias personas."""
+    """Escoge la deteccion de mayor area cuando hay varias personas."""
     detecciones = list(detecciones)
     if not detecciones:
         return None
@@ -147,18 +148,15 @@ def guardar_resumen_entrenamiento(
     entrenamiento = configuracion.get("entrenamiento", {})
     caracteristicas = configuracion.get("caracteristicas", {})
     augmentation_reidF = configuracion.get("augmentation_reidF", {})
+    limites = resolver_limites_entrenamiento(configuracion)
     ruta_resumen = Path(rutas["reportes"]) / "resumen_entrenamiento.json"
     ruta_resumen.parent.mkdir(parents=True, exist_ok=True)
     resumen = {
         "fecha": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "max_muestras_por_clase": int(entrenamiento.get("max_muestras_por_clase", 0)),
-        "max_muestras_rostro_por_clase": int(
-            entrenamiento.get("max_muestras_rostro_por_clase", entrenamiento.get("max_muestras_por_clase", 0))
-        ),
-        "min_muestras_reid_por_clase": int(entrenamiento.get("min_muestras_reid_por_clase", 0)),
-        "max_muestras_reid_por_clase": int(
-            entrenamiento.get("max_muestras_reid_por_clase", entrenamiento.get("max_muestras_por_clase", 0))
-        ),
+        "max_muestras_por_clase": limites["max_muestras_por_clase"],
+        "max_muestras_rostro_por_clase": limites["max_muestras_rostro_por_clase"],
+        "min_muestras_reid_por_clase": limites["min_muestras_reid_por_clase"],
+        "max_muestras_reid_por_clase": limites["max_muestras_reid_por_clase"],
         "kernel_rostro": str(entrenamiento.get("kernel_rostro", entrenamiento.get("kernel", "rbf"))),
         "kernel_reid": str(entrenamiento.get("kernel_reid", entrenamiento.get("kernel", "rbf"))),
         "validacion": float(entrenamiento.get("validacion", 0.20)),
@@ -209,7 +207,7 @@ def capturar_muestras_tiempo_real(
         tamano_imagen=int(configuracion.get("yolo", {}).get("tamano_imagen", 640)),
         dispositivo=str(configuracion.get("yolo", {}).get("dispositivo", "cpu")),
     )
-    detector_rostros = DetectorRostros()
+    detector_rostros = DetectorRostros.desde_config(configuracion)
     captura = abrir_fuente_video(fuente)
     if not captura.isOpened():
         raise RuntimeError(f"No se pudo abrir la fuente de video: {fuente}")
@@ -308,11 +306,12 @@ def entrenar_desde_capturas(configuracion: Dict[str, object]) -> Dict[str, objec
     """Entrena modelos SVM usando las capturas existentes del proyecto."""
     rutas = configuracion["rutas"]
     entrenamiento = configuracion.get("entrenamiento", {})
+    limites = resolver_limites_entrenamiento(configuracion)
 
-    max_muestras = int(entrenamiento.get("max_muestras_por_clase", 0))
-    max_muestras_rostro = int(entrenamiento.get("max_muestras_rostro_por_clase", max_muestras))
-    max_muestras_reid = int(entrenamiento.get("max_muestras_reid_por_clase", max_muestras))
-    min_muestras_reid = int(entrenamiento.get("min_muestras_reid_por_clase", 0))
+    max_muestras = limites["max_muestras_por_clase"]
+    max_muestras_rostro = limites["max_muestras_rostro_por_clase"]
+    max_muestras_reid = limites["max_muestras_reid_por_clase"]
+    min_muestras_reid = limites["min_muestras_reid_por_clase"]
     semilla = int(entrenamiento.get("semilla", 42))
     omitir_sin_roi = bool(entrenamiento.get("omitir_rostros_sin_roi", True))
     filtrar_rostros_baja_calidad = bool(entrenamiento.get("filtrar_rostros_baja_calidad", True))
@@ -332,6 +331,7 @@ def entrenar_desde_capturas(configuracion: Dict[str, object]) -> Dict[str, objec
         tamano_minimo=int(umbrales.get("tamano_minimo_rostro", 40)),
         nitidez_minima=float(umbrales.get("nitidez_minima", 60.0)),
         parametros_hog=parametros_hog,
+        configuracion=configuracion,
     )
     vectores_reid = np.asarray([], dtype="float32")
     etiquetas_reid = np.asarray([])
@@ -473,4 +473,3 @@ def crear_dataset_demo(configuracion: Dict[str, object]) -> None:
             cv2.imwrite(str(carpeta / f"demo_{i + 1:03d}.jpg"), imagen)
 
     print(f"[INFO] Dataset demo creado en: {base_reid}")
-

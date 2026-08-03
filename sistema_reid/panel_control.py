@@ -10,6 +10,7 @@ from typing import Dict, Iterable, Optional
 import cv2
 import numpy as np
 
+from .configuracion import resolver_limites_entrenamiento
 from .inferencia import ResultadoIdentidad, formatear_porcentaje
 
 
@@ -126,16 +127,13 @@ class PanelControlInferencia:
         except OSError:
             return None
         entrenamiento = self.configuracion.get("entrenamiento", {})
+        limites = resolver_limites_entrenamiento(self.configuracion)
         return {
             "fecha": f"metadata: {ruta.name}",
-            "max_muestras_por_clase": int(entrenamiento.get("max_muestras_por_clase", 0)),
-            "max_muestras_rostro_por_clase": int(
-                entrenamiento.get("max_muestras_rostro_por_clase", entrenamiento.get("max_muestras_por_clase", 0))
-            ),
-            "min_muestras_reid_por_clase": int(entrenamiento.get("min_muestras_reid_por_clase", 0)),
-            "max_muestras_reid_por_clase": int(
-                entrenamiento.get("max_muestras_reid_por_clase", entrenamiento.get("max_muestras_por_clase", 0))
-            ),
+            "max_muestras_por_clase": limites["max_muestras_por_clase"],
+            "max_muestras_rostro_por_clase": limites["max_muestras_rostro_por_clase"],
+            "min_muestras_reid_por_clase": limites["min_muestras_reid_por_clase"],
+            "max_muestras_reid_por_clase": limites["max_muestras_reid_por_clase"],
             "kernel_rostro": str(entrenamiento.get("kernel_rostro", entrenamiento.get("kernel", "rbf"))),
             "kernel_reid": str(entrenamiento.get("kernel_reid", entrenamiento.get("kernel", "rbf"))),
             "omitir_rostros_sin_roi": bool(entrenamiento.get("omitir_rostros_sin_roi", True)),

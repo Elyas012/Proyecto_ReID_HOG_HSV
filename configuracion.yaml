@@ -79,6 +79,14 @@ yolo:
   tamano_imagen: 640
   dispositivo: cpu
 
+rostros:
+  # yunet = detector facial moderno de OpenCV; haar = clasico y mas simple.
+  detector: yunet
+  yunet_modelo: modelos/face_detection_yunet_2023mar.onnx
+  yunet_score: 0.60
+  yunet_nms: 0.30
+  yunet_top_k: 5000
+
 umbrales:
   score_rostro: 0.70
   margen_rostro: 0.05
@@ -127,12 +135,12 @@ aprendizaje_reid_en_vivo:
   reentrenar_async: true
   # Guarda el buffer cada N muestras vivas para reducir escritura a disco durante video.
   guardar_buffer_cada: 4
-  reentrenar_combinado_al_iniciar: true
+  reentrenar_combinado_al_iniciar: false
   modelo_salida: svm_reidentificacion_combinado.pkl
   usar_modelo_en_vivo: true
   max_muestras_vivas_por_identidad: 100
   max_imagenes_carpeta_por_identidad: 100
-  score_rostro_min_aprendizaje: 0.85
+  score_rostro_min_aprendizaje: 0.93
   margen_rostro_min_aprendizaje: 0.20
 
 augmentation_reidF:
@@ -174,9 +182,12 @@ entrenamiento:
   probabilidad: true
   # 0 usa todas las imagenes disponibles en cada carpeta/clase.
   max_muestras_por_clase: 0
-  # Rango especifico para rostro. 0 hereda/usa todas.
+
+  # Rango especifico para rostro. 0 hereda max_muestras_por_clase.
+  # Si ambos estan en 0, usa todas.
   max_muestras_rostro_por_clase: 0
-  # Rango especifico para Re-ID. Min 0 no filtra; max 0 usa todas.
+  # Rango especifico para Re-ID. Min 0 no filtra; max 0 hereda max_muestras_por_clase.
+  # Si ambos maximos estan en 0, usa todas.
   min_muestras_reid_por_clase: 0
   max_muestras_reid_por_clase: 0
   # true = omite imagenes donde no detecta ROI facial.

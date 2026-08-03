@@ -558,7 +558,7 @@ def capturar_roi_rostros_desde_video(
         tamano_imagen=tamano_yolo_video if tamano_yolo_video > 0 else int(yolo_config.get("tamano_imagen", 640)),
         dispositivo=str(yolo_config.get("dispositivo", configuracion.get("ejecucion", {}).get("dispositivo", "cpu"))),
     )
-    detector_rostros = DetectorRostros()
+    detector_rostros = DetectorRostros.desde_config(configuracion)
     rastreador = RastreadorSimple(distancia_maxima=90.0, max_frames_perdidos=8)
     fps_video_origen = float(captura.get(cv2.CAP_PROP_FPS) or 0.0)
     ancho_origen = int(captura.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)

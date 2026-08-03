@@ -45,6 +45,11 @@ class EntrenadorReIDEnVivo:
     etiquetas_base: List[str] = field(default_factory=list)
     vectores: List[np.ndarray] = field(default_factory=list)
     etiquetas: List[str] = field(default_factory=list)
+    fuentes_base_pendientes: Sequence[Tuple[str, str | Path]] = field(default_factory=list)
+    max_muestras_base_por_clase: int = 0
+    min_muestras_base_por_clase: int = 0
+    semilla_base: int = 42
+    bases_cargadas: bool = False
     muestras_nuevas: int = 0
     modelo: Optional[ArtefactosSVM] = None
     _reentrenando: bool = False
@@ -85,6 +90,7 @@ class EntrenadorReIDEnVivo:
         """Carga varias carpetas Re-ID base para combinarlas con el buffer vivo."""
         self.vectores_base = []
         self.etiquetas_base = []
+        self.bases_cargadas = True
         if not self.combinar_con_base:
             return
 
@@ -129,6 +135,34 @@ class EntrenadorReIDEnVivo:
 
         if self.etiquetas_base:
             print(f"[INFO] Re-ID base total cargado para combinar: {self.resumen_base()}")
+
+    def configurar_bases_pendientes(
+        self,
+        carpetas_reid: Sequence[Tuple[str, str | Path]],
+        max_muestras_por_clase: int = 0,
+        min_muestras_por_clase: int = 0,
+        semilla: int = 42,
+    ) -> None:
+        """Guarda fuentes base para cargarlas solo cuando haga falta entrenar."""
+        self.fuentes_base_pendientes = list(carpetas_reid)
+        self.max_muestras_base_por_clase = int(max_muestras_por_clase)
+        self.min_muestras_base_por_clase = int(min_muestras_por_clase)
+        self.semilla_base = int(semilla)
+        self.bases_cargadas = False
+
+    def asegurar_bases_cargadas(self) -> None:
+        """Carga el dataset base una sola vez antes de entrenar Re-ID combinado."""
+        if self.bases_cargadas or not self.combinar_con_base:
+            return
+        if not self.fuentes_base_pendientes:
+            self.bases_cargadas = True
+            return
+        self.cargar_bases_reid(
+            self.fuentes_base_pendientes,
+            max_muestras_por_clase=self.max_muestras_base_por_clase,
+            min_muestras_por_clase=self.min_muestras_base_por_clase,
+            semilla=self.semilla_base,
+        )
 
     def _contar_etiquetas(self, etiquetas: Sequence[str]) -> Dict[str, int]:
         """Cuenta etiquetas con orden estable para diagnostico."""
@@ -276,6 +310,7 @@ class EntrenadorReIDEnVivo:
 
     def entrenar_si_es_posible(self) -> bool:
         """Entrena o actualiza el SVM Re-ID si ya hay datos suficientes."""
+        self.asegurar_bases_cargadas()
         vectores, etiquetas = self._dataset_entrenamiento()
         valido, razon = hay_datos_para_svm(etiquetas, self.minimo_por_identidad)
         if not valido:

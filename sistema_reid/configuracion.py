@@ -40,6 +40,13 @@ CONFIGURACION_DEFECTO: Dict[str, Any] = {
         "tamano_yolo": 416,
     },
     "yolo": {"pesos": "modelos/yolov8n.pt", "clase_persona": 0, "confianza": 0.40, "tamano_imagen": 640},
+    "rostros": {
+        "detector": "yunet",
+        "yunet_modelo": "modelos/face_detection_yunet_2023mar.onnx",
+        "yunet_score": 0.60,
+        "yunet_nms": 0.30,
+        "yunet_top_k": 5000,
+    },
     "umbrales": {"score_rostro": 0.80, "margen_rostro": 0.12, "score_reid": 0.65, "nitidez_minima": 60.0, "tamano_minimo_rostro": 40},
     "visualizacion": {"modo_cajas": "ambas"},
     "rostro_en_persona": {
@@ -147,6 +154,32 @@ def cargar_configuracion(ruta_configuracion: str | Path = "configuracion.yaml") 
     return resolver_rutas(configuracion)
 
 
+def _entero_no_negativo(valor: Any, defecto: int = 0) -> int:
+    """Convierte valores de YAML a enteros no negativos."""
+    try:
+        numero = int(valor)
+    except (TypeError, ValueError):
+        numero = defecto
+    return max(0, numero)
+
+
+def resolver_limites_entrenamiento(configuracion: Dict[str, Any]) -> Dict[str, int]:
+    """Devuelve los limites efectivos de muestras usados al entrenar."""
+    entrenamiento = configuracion.get("entrenamiento", {}) or {}
+    max_general = _entero_no_negativo(entrenamiento.get("max_muestras_por_clase", 0))
+    max_rostro = _entero_no_negativo(entrenamiento.get("max_muestras_rostro_por_clase", 0))
+    max_reid = _entero_no_negativo(entrenamiento.get("max_muestras_reid_por_clase", 0))
+
+    return {
+        "max_muestras_por_clase": max_general,
+        # 0 en los especificos significa heredar el limite global; si el global
+        # tambien es 0, entonces se usan todas las imagenes.
+        "max_muestras_rostro_por_clase": max_rostro if max_rostro > 0 else max_general,
+        "max_muestras_reid_por_clase": max_reid if max_reid > 0 else max_general,
+        "min_muestras_reid_por_clase": _entero_no_negativo(entrenamiento.get("min_muestras_reid_por_clase", 0)),
+    }
+
+
 def resolver_rutas(configuracion: Dict[str, Any]) -> Dict[str, Any]:
     """Convierte las rutas relativas del YAML en rutas absolutas listas para usar."""
     base = Path(configuracion.get("_base", ".")).resolve()
@@ -160,6 +193,9 @@ def resolver_rutas(configuracion: Dict[str, Any]) -> Dict[str, Any]:
     pesos = Path(str(configuracion.get("yolo", {}).get("pesos", "modelos/yolov8n.pt")))
     if not pesos.is_absolute():
         configuracion["yolo"]["pesos"] = str(base / pesos)
+    modelo_yunet = Path(str(configuracion.get("rostros", {}).get("yunet_modelo", "modelos/face_detection_yunet_2023mar.onnx")))
+    if not modelo_yunet.is_absolute():
+        configuracion.setdefault("rostros", {})["yunet_modelo"] = str(base / modelo_yunet)
     return configuracion
 
 
